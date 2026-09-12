@@ -219,6 +219,27 @@ void RenderManager::EndFrame()
 
 	ImGui_Impl_Render();
 
+	// bgfx silently drops submissions past BGFX_CONFIG_MAX_DRAW_CALLS and reuses matrix
+	// cache slot 0 past BGFX_CONFIG_MAX_MATRIX_CACHE (both 65536 by default), and its
+	// warning for that is compiled out in release. Zones with very many objects can reach
+	// those caps - one draw is submitted per object per material batch - so report the
+	// counts once when they get close, rather than losing geometry with no explanation.
+	if (const bgfx::Stats* stats = bgfx::getStats())
+	{
+		static uint32_t s_peakDraws = 0;
+		if (stats->numDraw > s_peakDraws)
+		{
+			const uint32_t previous = s_peakDraws;
+			s_peakDraws = stats->numDraw;
+
+			if (s_peakDraws >= 60000 && previous < 60000)
+			{
+				SPDLOG_WARN("RenderManager: {} draw calls submitted this frame, approaching the "
+					"bgfx limit of 65536 - geometry past that point is silently dropped", s_peakDraws);
+			}
+		}
+	}
+
 	// Advance to next frame. Rendering thread will be kicked to process submitted rendering primitives.
 	bgfx::frame();
 }

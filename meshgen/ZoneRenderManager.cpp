@@ -13,6 +13,7 @@
 #include "meshgen/ZoneCollisionMesh.h"
 #include "meshgen/ZoneProject.h"
 #include "meshgen/ZoneRenderManager.h"
+#include "meshgen/Logging.h"
 #include "meshgen/ZoneResourceManager.h"
 #include "eqglib/eqg_resource_manager.h"
 #include "eqglib/eqg_terrain.h"
@@ -1218,6 +1219,10 @@ void ZoneNavMeshRender::Build()
 		}
 	}
 
+	SPDLOG_DEBUG("ZoneNavMeshRender::Build: flags=0x{:04x} fill={} verts/{} indices, boundaries={} verts, points={} verts",
+		m_flags, navMeshTileVertices.size(), navMeshTileIndices.size(),
+		polyBoundaryVertices.size(), polyPointVertices.size());
+
 	if (!navMeshTileVertices.empty())
 	{
 		// Create vertex buffer from gathered data.
@@ -1228,6 +1233,12 @@ void ZoneNavMeshRender::Build()
 		m_indexBuffer = bgfx::createIndexBuffer(
 			bgfx::copy(navMeshTileIndices.data(), static_cast<uint32_t>(navMeshTileIndices.size()) * sizeof(uint32_t)),
 			BGFX_BUFFER_INDEX32);
+
+		if (!isValid(m_tilePolysVB) || !isValid(m_indexBuffer))
+		{
+			SPDLOG_ERROR("ZoneNavMeshRender::Build: failed to create tile buffers (vb valid={}, ib valid={}) for {} verts",
+				isValid(m_tilePolysVB), isValid(m_indexBuffer), navMeshTileVertices.size());
+		}
 	}
 
 	if (!polyBoundaryVertices.empty())
