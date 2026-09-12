@@ -527,8 +527,7 @@ bool Terrain::InitFromEQGData(
 	const std::span<SEQMVertex>& vertices,
 	const std::span<SEQMFace>& faces,
 	const std::span<uint32_t>& RGBs,
-	const MaterialPalettePtr& materialPalette,
-	const glm::mat4& transform)
+	const MaterialPalettePtr& materialPalette)
 {
 	m_fromEQG = true;
 	m_materialPalette = materialPalette;
@@ -541,20 +540,12 @@ bool Terrain::InitFromEQGData(
 	m_rgbTints.resize(m_vertexOffset + vertices.size());
 	m_faces.resize(m_faceOffset + faces.size());
 
-	// Normals take the rotation (and any scale) but not the translation.
-	const glm::mat3 normalTransform = glm::mat3(transform);
-
 	for (uint32_t index = 0; index < vertices.size(); ++index)
 	{
 		SEQMVertex& inVertex = vertices[index];
 
-		glm::vec3 position = glm::vec3(transform * glm::vec4(inVertex.pos.yzx, 1.0f));
-		glm::vec3 normal = normalTransform * inVertex.normal.yzx;
-		if (float len = glm::length(normal); len > 0.0f)
-			normal /= len;
-
-		m_vertices[m_vertexOffset + index] = position;
-		m_normals[m_vertexOffset + index] = normal;
+		m_vertices[m_vertexOffset + index] = inVertex.pos.yzx;
+		m_normals[m_vertexOffset + index] = inVertex.normal.yzx;
 		m_uvs[m_vertexOffset + index] = inVertex.uv;
 		m_uvs2[m_vertexOffset + index] = inVertex.uv2;
 
@@ -568,11 +559,7 @@ bool Terrain::InitFromEQGData(
 		}
 
 		m_rgbTints[m_vertexOffset + index] = inVertex.color;
-
-		// Enclose the placed vertex, so the box is in the same frame as m_vertices (as the
-		// WLD path does). Enclosing the raw pos would leave the box behind once the terrain
-		// is moved by its instance transform.
-		m_aabb.enclose(position);
+		m_aabb.enclose(inVertex.pos);
 	}
 
 	for (uint32_t index = 0; index < faces.size(); ++index)

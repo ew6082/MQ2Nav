@@ -129,32 +129,51 @@ The `.TER`/`.MOD` suffix tests use `ci_ends_with`, so the empty-name underflow
 that the older `zone-utilities` loader had does not exist here.
 
 
-The terrain instance's transform
---------------------------------
+The terrain instance's transform must NOT be applied
+----------------------------------------------------
 
-In a v2 zone, instance 0 is the terrain: it names the `.TER` mesh and carries
-that mesh's translation, rotation and scale like any other instance. As
-originally written, `eqglib` did not place it.
+In a v2 zone, instance 0 is the terrain: it names the `.TER` mesh and carries a
+translation, rotation and scale in the same record shape as every other
+instance. Those values are **not** a placement for the terrain. The `.TER`
+vertices are already authored in world space, and `ParseZone` skipping instance
+0 - the actor-creating branch is guarded on
+`header->version == 1 || instanceId > 0` - is correct, not an oversight.
 
-`ParseZone` skips instance 0 deliberately - the actor-creating branch is guarded
-on `header->version == 1 || instanceId > 0` - and read it only for its baked
-lighting. The terrain geometry arrives separately, through `ParseTerrain` on the
-`EQGT` chunk, which built it with `CreateTerrain()` and `InitFromEQGData()`;
-neither took a placement, so the terrain landed at the origin unrotated while
-every object around it was placed by its own instance transform.
+Applying that transform moves the terrain out from under everything else. It is
+tempting to apply it: 223 of 265 shipped zones give the terrain instance a
+non-zero position, and almost all of them a `rx = -90`, so it looks like a
+placement being dropped. It is not.
 
-This is not a corner case. Of the 265 shipped zones, 223 give their terrain a
-non-zero position, 20 a scale other than 1.0, and 4 a rotation beyond the
-`rx = -90` degrees the exporter emits almost everywhere.
+### The measurement
 
-`ParseTerrain` now reads instance 0 from the `.zon` it already holds for the
-lighting block, checks that it references a `.TER` mesh, builds the transform
-with the same `translate * quat(orientation) * scale` composition and `.yzx`
-swizzles `ParseZone` uses for actors, and passes it to `InitFromEQGData`, which
-applies it to positions and normals. The terrain's bounding box is now taken
-from the placed vertices; it was previously built from the raw, unswizzled
-`.TER` positions, which put it in a different frame from `m_vertices` (the WLD
-path had always used the final vertex).
+Take the `.TER` vertices straight out of the archive, apply only the `.yzx`
+swizzle that `InitFromEQGData` does, and compare against a known-good navmesh
+built from the real zone geometry:
 
-Worth checking visually against a zone with a large terrain offset before
-trusting regenerated meshes.
+|                | source                        | x                     | y                    | z                     |
+| -------------- | ----------------------------- | --------------------- | -------------------- | --------------------- |
+| ruinedrelic    | `.TER`, swizzle only          | `-1897.26 .. 1975.77` | `-743.50 .. 866.30`  | `-1604.38 .. 2339.08` |
+|                | navmesh (ground truth)        | `-1897.26 .. 1975.77` | `-581.30 .. 3531.55` | `-1604.40 .. 2339.08` |
+| candlemakers   | `.TER`, swizzle only          | `-2016.33 .. 1894.62` | `-324.03 .. 563.78`  | `-2599.96 .. 2372.01` |
+|                | navmesh (ground truth)        | `-1975.47 .. 1894.62` | `-324.03 .. 450.00`  | `-2599.96 .. 2000.00` |
+
+The horizontal bounds agree to within 0.02 units with no transform applied. They
+cannot agree afterwards: ruinedrelic's terrain instance would shift the mesh by
+`(138.25, -200.64, -294.89)` and rotate it 90 degrees. Where the navmesh is
+narrower than the terrain (candlemakers x min, z max) it is clipped by the
+build's max extents; every unclipped edge matches exactly.
+
+The vertex counts corroborate the pairing independently: instance 0's baked
+lighting block is 33,508 entries for ruinedrelic and 540,889 for candlemakers,
+matching each `.TER`'s vertex count exactly. Instance 0 does describe the
+terrain - the loader is right to read its colours - it just does not place it.
+
+### One real inconsistency nearby
+
+`InitFromEQGData` stores each vertex as `inVertex.pos.yzx` but grows the
+bounding box with `m_aabb.enclose(inVertex.pos)`, the unswizzled value, so
+`Terrain::m_aabb` ends up in a different frame from `Terrain::m_vertices`. The
+WLD path a few hundred lines above encloses the final swizzled vertex, which
+looks like the intended behaviour. `m_aabb` currently feeds only
+`BuildConvexHull` in `GeometryUtils.cpp`. This is left as found - noted here
+rather than changed, since it is unrelated to placement and untested.
