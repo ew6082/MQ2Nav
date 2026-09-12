@@ -120,8 +120,11 @@ public:
 	virtual ~Terrain();
 
 	bool InitFromWLDData(const STerrainWLDData& wldData);
+	// transform is the terrain instance's placement from the .zon (instance 0), in the
+	// same world frame the actors use. Identity when the zone gives none.
 	bool InitFromEQGData(const std::span<SEQMVertex>& vertices, const std::span<SEQMFace>& faces,
-		const std::span<uint32_t>& RGBs, const MaterialPalettePtr& materialPalette);
+		const std::span<uint32_t>& RGBs, const MaterialPalettePtr& materialPalette,
+		const glm::mat4& transform = glm::mat4(1.0f));
 	void InitAreasFromEQGData(const std::span<SZONArea>& zonAreas, const char* stringPool);
 
 	void AddArea(const TerrainAreaPtr& area) { m_areas.push_back(area); }

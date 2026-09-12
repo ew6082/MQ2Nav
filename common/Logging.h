@@ -17,7 +17,7 @@ namespace fmt {
 		constexpr auto parse(ParseContext& ctx) { return ctx.begin(); }
 
 		template <typename FormatContext>
-		auto format(const glm::vec3& p, FormatContext& ctx) {
+		auto format(const glm::vec3& p, FormatContext& ctx) const {
 			return format_to(ctx.out(), "({:.2f}, {:.2f}, {:.2f})", p.x, p.y, p.z);
 		}
 	};
@@ -28,7 +28,7 @@ namespace fmt {
 		constexpr auto parse(ParseContext& ctx) { return ctx.begin(); }
 
 		template <typename FormatContext>
-		auto format(const glm::vec2& p, FormatContext& ctx) {
+		auto format(const glm::vec2& p, FormatContext& ctx) const {
 			return format_to(ctx.out(), "({:.2f}, {:.2f})", p.x, p.y);
 		}
 	};

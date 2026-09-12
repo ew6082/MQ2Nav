@@ -605,21 +605,45 @@ bool EQGLoader::ParseTerrain(const std::vector<char>& buffer, const std::string&
 	std::unique_ptr<uint8_t[]> litBuffer;
 	std::span<uint32_t> litVerts;
 
-	// Check to see if we have a LIT data from a matching v2 EQGZ file
+	// The terrain's placement lives in the .zon, not in the .TER: instance 0 names the
+	// terrain mesh and carries its translation, rotation and scale like any other
+	// instance. ParseZone skips instance 0 on purpose, so it is read here. In a v2 zone
+	// the same record is followed by the terrain's baked lighting.
+	glm::mat4 terrainTransform(1.0f);
+
 	if (!m_zonData.empty())
 	{
-		BufferReader litReader(m_zonData);
+		BufferReader zonReader(m_zonData);
 
-		SZONHeader* header = litReader.read_ptr<SZONHeader>();
-		if (strncmp(header->magic, "EQGZ", 4) == 0 && header->version == 2)
+		SZONHeader* header = zonReader.read_ptr<SZONHeader>();
+		if (strncmp(header->magic, "EQGZ", 4) == 0 && header->num_instances > 0)
 		{
-			litReader.skip<char>(header->string_pool_size);
-			litReader.skip<int>(header->num_meshes);
-			litReader.skip<SZONInstance>();
-			uint32_t numLitVerts = litReader.read<uint32_t>();
+			const char* zonStringPool = zonReader.read_array<const char>(header->string_pool_size);
+			int* meshNameOffsets = zonReader.read_array<int>(header->num_meshes);
+			SZONInstance* instance = zonReader.read_ptr<SZONInstance>();
 
-			uint32_t* litData = litReader.read_array<uint32_t>(numLitVerts);
-			litVerts = { litData, numLitVerts };
+			bool instanceIsTerrain = instance->mesh_id >= 0
+				&& instance->mesh_id < static_cast<int>(header->num_meshes)
+				&& meshNameOffsets[instance->mesh_id] != -1
+				&& ci_ends_with(zonStringPool + meshNameOffsets[instance->mesh_id], ".TER");
+
+			if (instanceIsTerrain)
+			{
+				// Same composition as the actor placement in ParseZone.
+				glm::vec3 pos = instance->translation.yzx;
+				glm::vec3 orientation = glm::vec3(instance->rotation.z, instance->rotation.y, instance->rotation.x).yzx;
+
+				terrainTransform = glm::translate(glm::mat4(1.0f), pos)
+					* glm::toMat4(glm::quat(orientation))
+					* glm::scale(glm::mat4(1.0f), glm::vec3(instance->scale));
+			}
+
+			if (header->version == 2)
+			{
+				uint32_t numLitVerts = zonReader.read<uint32_t>();
+				uint32_t* litData = zonReader.read_array<uint32_t>(numLitVerts);
+				litVerts = { litData, numLitVerts };
+			}
 		}
 	}
 
@@ -652,7 +676,7 @@ bool EQGLoader::ParseTerrain(const std::vector<char>& buffer, const std::string&
 
 	std::shared_ptr<Terrain> newTerrain = m_resourceMgr->CreateTerrain();
 
-	newTerrain->InitFromEQGData(eqmVertices, eqmFaces, litVerts, vertex_data.material_palette);
+	newTerrain->InitFromEQGData(eqmVertices, eqmFaces, litVerts, vertex_data.material_palette, terrainTransform);
 
 	m_resourceMgr->SetTerrain(std::move(newTerrain));
 	return true;

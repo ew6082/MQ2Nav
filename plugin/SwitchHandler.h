@@ -48,7 +48,8 @@ private:
 
 	struct DoorActivation
 	{
-		BYTE door_id;
+		// Matches the width of EQSwitch::ID - a BYTE truncates ids past 255.
+		uint32_t door_id;
 		clock::time_point activation_time;
 	};
 	std::vector<DoorActivation> m_activations;

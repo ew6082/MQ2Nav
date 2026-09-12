@@ -6,7 +6,7 @@
 #pragma once
 
 #include "plugin/Renderable.h"
-#include "eqlib/EQDX9.h"
+#include "eqlib/game/EQDX9.h"
 #include <glm/glm.hpp>
 
 #include <map>
