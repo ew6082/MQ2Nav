@@ -177,3 +177,45 @@ WLD path a few hundred lines above encloses the final swizzled vertex, which
 looks like the intended behaviour. `m_aabb` currently feeds only
 `BuildConvexHull` in `GeometryUtils.cpp`. This is left as found - noted here
 rather than changed, since it is unrelated to placement and untested.
+
+
+Instance rotations do not survive a component swap
+--------------------------------------------------
+
+`SZONInstance::rotation` is three Euler angles in the file's own coordinate
+frame. Model vertices are stored pre-swizzled by `.yzx` (`InitFromEQGData`), so
+the rotation has to be moved into that same frame before it is applied.
+
+Permuting the Euler components is not that conversion. It gives the right answer
+only when the rotations commute - when at most one axis is non-zero - because
+`glm::quat(vec3)` composes its three angles in a fixed order and permuting the
+components reorders them. The conversion that is always correct conjugates the
+rotation by the coordinate permutation:
+
+```
+    P maps (x, y, z) -> (y, z, x)
+    R_world = P * R_file * transpose(P)
+```
+
+where `R_file` is built in the file's frame as `quat(rz, ry, rx)`. The
+pre-eqglib loader got this right by accident of structure: it applied
+`quat(rz, ry, rx)` to unswizzled vertices and swizzled the result, which is the
+same conjugation.
+
+This is easy to miss because almost every zone rotates its instances about a
+single axis, where the shortcut happens to work:
+
+| zone         | rotation about `rx` only | all three axes |
+| ------------ | ------------------------ | -------------- |
+| ruinedrelic  | 273                      | 6 of 285       |
+| candlemakers | 1731                     | 5136 of 7001   |
+
+candlemakers is the zone that exposes it. `OBJ_CaveWallBoulder_b.MOD` at
+`(-284.83, -81.76, 1412.71)` with rotation `(117.86, -64.61, -67.55)` degrees is
+a clear case: the mesh sits well away from its instance origin, so a wrongly
+composed rotation swings a wall-sized rock below the map, leaving the
+stalactites above it floating and the navmesh built over geometry that is no
+longer where it was.
+
+The same caution applies to the terrain instance above, for the opposite reason:
+there the transform must not be applied at all.
