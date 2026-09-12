@@ -11,6 +11,24 @@
 #include "spdlog/spdlog.h"
 
 #include <map>
+#include <unordered_map>
+
+namespace
+{
+	// Definitions outlive the instances placed from them, but the buffers are released as
+	// soon as the last instance goes away, so the cache holds weak references and entries
+	// for dead definitions are cleaned out as they are encountered.
+	std::unordered_map<const eqg::SimpleModelDefinition*, std::weak_ptr<SharedModelBuffers>> s_sharedBuffers;
+}
+
+SharedModelBuffers::~SharedModelBuffers()
+{
+	if (bgfx::isValid(vertexBuffer))
+		bgfx::destroy(vertexBuffer);
+
+	if (bgfx::isValid(indexBuffer))
+		bgfx::destroy(indexBuffer);
+}
 
 MGSimpleModel::MGSimpleModel()
 {
@@ -19,6 +37,13 @@ MGSimpleModel::MGSimpleModel()
 MGSimpleModel::~MGSimpleModel()
 {
 	DestroyGPUBuffers();
+}
+
+const std::vector<MaterialBatch>& MGSimpleModel::GetMaterialBatches() const
+{
+	static const std::vector<MaterialBatch> empty;
+
+	return m_shared ? m_shared->materialBatches : empty;
 }
 
 bool MGSimpleModel::InitBatchInstances()
@@ -40,6 +65,17 @@ bool MGSimpleModel::BuildGPUBuffers()
 	}
 
 	const auto& def = m_definition;
+
+	// Every instance of a definition produces byte-identical geometry, so build it once
+	// and share it.
+	auto cached = s_sharedBuffers.find(def.get());
+	if (cached != s_sharedBuffers.end())
+	{
+		if ((m_shared = cached->second.lock()))
+			return true;
+
+		s_sharedBuffers.erase(cached);
+	}
 
 	if (def->m_vertices.empty() || def->m_faces.empty())
 	{
@@ -89,7 +125,7 @@ bool MGSimpleModel::BuildGPUBuffers()
 	// Build index buffer in material order and create batches
 	std::vector<uint32_t> indices;
 	indices.reserve(def->m_faces.size() * 3);
-	m_materialBatches.clear();
+	std::vector<MaterialBatch> materialBatches;
 
 	eqg::MaterialPalette* palette = def->m_materialPalette.get();
 
@@ -111,7 +147,7 @@ bool MGSimpleModel::BuildGPUBuffers()
 		}
 
 		indices.insert(indices.end(), matIndices.begin(), matIndices.end());
-		m_materialBatches.push_back(batch);
+		materialBatches.push_back(batch);
 	}
 
 	if (vertices.empty() || indices.empty())
@@ -121,38 +157,40 @@ bool MGSimpleModel::BuildGPUBuffers()
 	}
 
 	// Create bgfx buffers
-	m_vertexBuffer = bgfx::createVertexBuffer(
+	auto shared = std::make_shared<SharedModelBuffers>();
+
+	shared->vertexBuffer = bgfx::createVertexBuffer(
 		bgfx::copy(vertices.data(), static_cast<uint32_t>(vertices.size() * sizeof(StaticMeshVertex))),
 		StaticMeshVertex::GetLayout());
 
-	m_indexBuffer = bgfx::createIndexBuffer(
+	shared->indexBuffer = bgfx::createIndexBuffer(
 		bgfx::copy(indices.data(), static_cast<uint32_t>(indices.size() * sizeof(uint32_t))),
 		BGFX_BUFFER_INDEX32);
 
-	m_indexCount = static_cast<uint32_t>(indices.size());
-	m_gpuBuffersBuilt = true;
+	if (!bgfx::isValid(shared->vertexBuffer) || !bgfx::isValid(shared->indexBuffer))
+	{
+		SPDLOG_ERROR("MGSimpleModel::BuildGPUBuffers: failed to create buffers for '{}' - bgfx static "
+			"buffer handles are exhausted", def->m_tag);
+		return false;
+	}
+
+	shared->indexCount = static_cast<uint32_t>(indices.size());
+	shared->materialBatches = std::move(materialBatches);
+
+	m_shared = shared;
+	s_sharedBuffers[def.get()] = shared;
 
 	SPDLOG_TRACE("MGSimpleModel::BuildGPUBuffers: Built buffers for '{}' ({} verts, {} indices, {} batches)",
-		def->m_tag, vertices.size(), indices.size(), m_materialBatches.size());
+		def->m_tag, vertices.size(), indices.size(), m_shared->materialBatches.size());
 
 	return true;
 }
 
 void MGSimpleModel::DestroyGPUBuffers()
 {
-	if (bgfx::isValid(m_vertexBuffer))
-	{
-		bgfx::destroy(m_vertexBuffer);
-		m_vertexBuffer = BGFX_INVALID_HANDLE;
-	}
-
-	if (bgfx::isValid(m_indexBuffer))
-	{
-		bgfx::destroy(m_indexBuffer);
-		m_indexBuffer = BGFX_INVALID_HANDLE;
-	}
-
-	m_indexCount = 0;
+	// The buffers belong to the definition and are destroyed once the last instance
+	// referencing them is gone.
+	m_shared.reset();
 	m_gpuBuffersBuilt = false;
 }
 
