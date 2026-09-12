@@ -178,32 +178,31 @@ looks like the intended behaviour. `m_aabb` currently feeds only
 `BuildConvexHull` in `GeometryUtils.cpp`. This is left as found - noted here
 rather than changed, since it is unrelated to placement and untested.
 
-
-Instance rotations do not survive a component swap
---------------------------------------------------
+Instance rotations: an open problem
+-----------------------------------
 
 `SZONInstance::rotation` is three Euler angles in the file's own coordinate
 frame. Model vertices are stored pre-swizzled by `.yzx` (`InitFromEQGData`), so
 the rotation has to be moved into that same frame before it is applied.
+`ParseZone` does that by permuting the Euler components:
 
-Permuting the Euler components is not that conversion. It gives the right answer
-only when the rotations commute - when at most one axis is non-zero - because
-`glm::quat(vec3)` composes its three angles in a fixed order and permuting the
-components reorders them. The conversion that is always correct conjugates the
-rotation by the coordinate permutation:
+```c
+    orientation = glm::vec3(rotation.z, rotation.y, rotation.x).yzx;   // (ry, rx, rz)
+```
+
+Permuting components is not, in general, the same thing as changing frames. It
+agrees with the real conversion only when the rotations commute - when at most
+one axis is non-zero - because `glm::quat(vec3)` composes its three angles in a
+fixed order and the permutation reorders them. The conversion that is always
+correct conjugates the rotation:
 
 ```
     P maps (x, y, z) -> (y, z, x)
-    R_world = P * R_file * transpose(P)
+    R_world = P * R_file * transpose(P)      with R_file = quat(rz, ry, rx)
 ```
 
-where `R_file` is built in the file's frame as `quat(rz, ry, rx)`. The
-pre-eqglib loader got this right by accident of structure: it applied
-`quat(rz, ry, rx)` to unswizzled vertices and swizzled the result, which is the
-same conjugation.
-
-This is easy to miss because almost every zone rotates its instances about a
-single axis, where the shortcut happens to work:
+Almost every zone rotates its instances about a single axis, where the shortcut
+happens to work:
 
 | zone         | rotation about `rx` only | all three axes |
 | ------------ | ------------------------ | -------------- |
@@ -214,8 +213,21 @@ candlemakers is the zone that exposes it. `OBJ_CaveWallBoulder_b.MOD` at
 `(-284.83, -81.76, 1412.71)` with rotation `(117.86, -64.61, -67.55)` degrees is
 a clear case: the mesh sits well away from its instance origin, so a wrongly
 composed rotation swings a wall-sized rock below the map, leaving the
-stalactites above it floating and the navmesh built over geometry that is no
-longer where it was.
+stalactites above it floating.
 
-The same caution applies to the terrain instance above, for the opposite reason:
-there the transform must not be applied at all.
+### Why the obvious fix does not work
+
+Computing `R_world` as above and then handing it back as Euler angles through
+`glm::eulerAngles` fixes candlemakers and breaks everything else - tried, and
+reverted. `glm::eulerAngles` and the `glm::quat(vec3)` constructor do not agree
+on a composition convention, so the round trip does not reproduce the rotation
+it was given. `TransformComponent::SetRotation` in `meshgen/Components.h`
+already carries a hand-written correction for a symptom of the same
+inconsistency, which is a good warning sign.
+
+A real fix has to keep the rotation as a matrix or quaternion the whole way
+instead of passing Euler angles between stages. `TransformComponent` already
+stores a `glm::quat` and exposes `SetRotation(quat)`; it is `eqg::Actor` that
+holds its orientation as Euler angles and would need to carry a quaternion
+instead. Until that is done the multi-axis case stays wrong, and it is wrong in
+upstream too.
