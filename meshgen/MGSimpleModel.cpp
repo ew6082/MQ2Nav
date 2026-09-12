@@ -15,10 +15,23 @@
 
 namespace
 {
-	// Definitions outlive the instances placed from them, but the buffers are released as
-	// soon as the last instance goes away, so the cache holds weak references and entries
-	// for dead definitions are cleaned out as they are encountered.
-	std::unordered_map<const eqg::SimpleModelDefinition*, std::weak_ptr<SharedModelBuffers>> s_sharedBuffers;
+	// Buffers are shared by every instance placed from one definition, and released once
+	// the last of those instances is gone.
+	//
+	// The map is keyed by raw definition pointer, which is only a hint: loading another
+	// zone frees the previous zone's definitions and the allocator readily hands the same
+	// addresses back out, so an entry found by address may belong to a definition that no
+	// longer exists. Each entry therefore also holds a weak reference to the definition it
+	// was built from, and a lookup is only trusted when that still resolves to the same
+	// object. Without the check a model can be drawn with a completely different model's
+	// geometry.
+	struct SharedBufferEntry
+	{
+		std::weak_ptr<eqg::SimpleModelDefinition> definition;
+		std::weak_ptr<SharedModelBuffers> buffers;
+	};
+
+	std::unordered_map<const eqg::SimpleModelDefinition*, SharedBufferEntry> s_sharedBuffers;
 }
 
 SharedModelBuffers::~SharedModelBuffers()
@@ -71,9 +84,14 @@ bool MGSimpleModel::BuildGPUBuffers()
 	auto cached = s_sharedBuffers.find(def.get());
 	if (cached != s_sharedBuffers.end())
 	{
-		if ((m_shared = cached->second.lock()))
-			return true;
+		if (cached->second.definition.lock() == def)
+		{
+			if ((m_shared = cached->second.buffers.lock()))
+				return true;
+		}
 
+		// Either the buffers are gone or the address now belongs to a different
+		// definition; in both cases the entry is worthless.
 		s_sharedBuffers.erase(cached);
 	}
 
@@ -178,7 +196,7 @@ bool MGSimpleModel::BuildGPUBuffers()
 	shared->materialBatches = std::move(materialBatches);
 
 	m_shared = shared;
-	s_sharedBuffers[def.get()] = shared;
+	s_sharedBuffers[def.get()] = SharedBufferEntry{ def, shared };
 
 	SPDLOG_TRACE("MGSimpleModel::BuildGPUBuffers: Built buffers for '{}' ({} verts, {} indices, {} batches)",
 		def->m_tag, vertices.size(), indices.size(), m_shared->materialBatches.size());
