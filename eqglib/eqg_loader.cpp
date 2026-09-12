@@ -696,6 +696,31 @@ bool EQGLoader::ParseLOD(const std::vector<char>& buffer, const std::string& tag
 	return true;
 }
 
+// Model vertices are stored pre-swizzled by .yzx, so an instance's rotation has to be
+// expressed in that same permuted frame. Permuting the Euler components directly is only
+// valid when the rotations commute - when at most one axis is non-zero - because
+// glm::quat(vec3) composes its angles in a fixed order and the permutation reorders them.
+// Most zones only ever rotate about one axis and so were unaffected, but candlemakers
+// gives 5136 of its 7001 instances a rotation about all three, which left large pieces of
+// cave wall swung well away from where they belong.
+//
+// Build the rotation in the file's own frame, the way the pre-eqglib loader did, then
+// conjugate it by the coordinate permutation: R_world = P * R_file * transpose(P).
+static glm::vec3 WorldOrientationFromInstance(const glm::vec3& rotation)
+{
+	// P maps a vector (x, y, z) to (y, z, x), matching the .yzx swizzle applied to vertices.
+	static const glm::mat3 P{
+		glm::vec3(0.0f, 0.0f, 1.0f),
+		glm::vec3(1.0f, 0.0f, 0.0f),
+		glm::vec3(0.0f, 1.0f, 0.0f)
+	};
+
+	glm::mat3 fileRotation = glm::mat3_cast(glm::quat(
+		glm::vec3(rotation.z, rotation.y, rotation.x)));
+
+	return glm::eulerAngles(glm::quat_cast(P * fileRotation * glm::transpose(P)));
+}
+
 bool EQGLoader::ParseZone(const std::vector<char>& buffer, const std::string& tag)
 {
 	BufferReader reader(buffer);
@@ -813,7 +838,7 @@ bool EQGLoader::ParseZone(const std::vector<char>& buffer, const std::string& ta
 			ECollisionVolumeType volumetype = eCollisionVolumeNone;
 			float boundingRadius = pActorDef->CalculateBoundingRadius();
 			glm::vec3 pos = instance->translation.yzx;
-			glm::vec3 orientation = glm::vec3(instance->rotation.z, instance->rotation.y, instance->rotation.x).yzx;
+			glm::vec3 orientation = WorldOrientationFromInstance(instance->rotation);
 			float scale = instance->scale;
 
 			std::string actorTag = fmt::format("ZoneActor_{:05}", instanceId);
