@@ -12,6 +12,7 @@
 
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
@@ -19,6 +20,10 @@ namespace
 	// soon as the last instance goes away, so the cache holds weak references and entries
 	// for dead definitions are cleaned out as they are encountered.
 	std::unordered_map<const eqg::SimpleModelDefinition*, std::weak_ptr<SharedModelBuffers>> s_sharedBuffers;
+
+	// Definitions already reported as having no geometry, so the warning is emitted once
+	// per model rather than once per placement.
+	std::unordered_set<const eqg::SimpleModelDefinition*> s_reportedEmpty;
 }
 
 SharedModelBuffers::~SharedModelBuffers()
@@ -79,7 +84,15 @@ bool MGSimpleModel::BuildGPUBuffers()
 
 	if (def->m_vertices.empty() || def->m_faces.empty())
 	{
-		//SPDLOG_DEBUG("MGSimpleModel::BuildGPUBuffers: Empty geometry for '{}'", def->m_tag);
+		// A model that reaches here draws nothing, and every instance of it is invisible.
+		// Reported once per definition rather than once per instance - a zone can place
+		// thousands of copies of the same model.
+		if (s_reportedEmpty.insert(def.get()).second)
+		{
+			SPDLOG_WARN("MGSimpleModel::BuildGPUBuffers: '{}' has no geometry ({} vertices, {} faces); "
+				"every placement of it will be invisible", def->m_tag, def->m_vertices.size(), def->m_faces.size());
+		}
+
 		return false;
 	}
 
