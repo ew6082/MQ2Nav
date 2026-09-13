@@ -41,7 +41,7 @@ void SceneObjectsPanel::OnImGuiRender(bool* p_open)
 
 			if (m_filterByDistance)
 			{
-				ImGui::SliderFloat("Distance Filter", &m_distanceFilter, 0.0f, 100.0f);
+				ImGui::SliderFloat("Distance Filter", &m_distanceFilter, 0.0f, 500.0f);
 			}
 
 			// Rebuilding takes seconds on a large zone, so exclusions are collected up and
