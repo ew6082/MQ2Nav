@@ -111,6 +111,11 @@ void MeshPatchTool::handleMenu()
 
 		navMesh->DeleteMeshPatchById(deleteId);
 
+		// Geometry can be appended to the collision mesh but not taken back out of it, so
+		// removing a patch means regenerating the whole thing before the tiles rebuild.
+		if (auto zoneProj = m_meshTool->GetZoneProj())
+			zoneProj->RebuildCollisionMesh();
+
 		if (!modifiedTiles.empty())
 			m_meshTool->RebuildTiles(modifiedTiles);
 	}
@@ -181,6 +186,11 @@ std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, 
 		BuildPatchRing(m_hitPos, p, m_width), std::string());
 
 	m_currentPatchId = patch->id;
+
+	// Recording the patch is not enough: tiles are rebuilt from the collision mesh, so the
+	// geometry has to be in there before the rebuild or nothing changes.
+	if (auto zoneProj = m_meshTool->GetZoneProj())
+		zoneProj->AddMeshPatchGeometry(*patch);
 
 	return navMesh->GetTilesIntersectingMeshPatch(patch->id);
 }

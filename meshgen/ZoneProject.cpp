@@ -481,6 +481,16 @@ bool ZoneProject::BuildCollisionMesh()
 // lie over the surface it is repairing. They are ordinary triangles from here on: Recast
 // voxelizes them like anything else, which is the point - the generator gets a clean
 // surface to work from rather than having its output corrected afterwards.
+// Triangulated as a fan, so the ring has to be convex to come out right. The tool only
+// produces quads; a ring built by hand is the user's responsibility.
+static void AddPatchTriangles(ZoneCollisionMesh& collisionMesh, const MeshPatch& patch)
+{
+	for (size_t i = 1; i + 1 < patch.verts.size(); ++i)
+	{
+		collisionMesh.addTriangle(patch.verts[0], patch.verts[i], patch.verts[i + 1]);
+	}
+}
+
 void ZoneProject::AddMeshPatchesToCollisionMesh()
 {
 	auto navMesh = GetNavMesh();
@@ -489,16 +499,25 @@ void ZoneProject::AddMeshPatchesToCollisionMesh()
 
 	for (const auto& patch : navMesh->GetMeshPatches())
 	{
-		// Triangulated as a fan, so the ring has to be convex to come out right. The tool
-		// only produces quads; a ring built by hand is the user's responsibility.
-		if (patch->verts.size() < 3)
-			continue;
-
-		for (size_t i = 1; i + 1 < patch->verts.size(); ++i)
-		{
-			m_collisionMesh->addTriangle(patch->verts[0], patch->verts[i], patch->verts[i + 1]);
-		}
+		if (patch->verts.size() >= 3)
+			AddPatchTriangles(*m_collisionMesh, *patch);
 	}
+}
+
+// Adds a single patch to the collision mesh already in memory. Rebuilding tiles regenerates
+// them from that mesh rather than from the zone data, so a patch that is only recorded in
+// the navmesh has no effect until its geometry is in there too - and regenerating the whole
+// collision mesh for one patch takes seconds on a large zone.
+bool ZoneProject::AddMeshPatchGeometry(const MeshPatch& patch)
+{
+	if (!m_collisionMesh || patch.verts.size() < 3)
+		return false;
+
+	AddPatchTriangles(*m_collisionMesh, patch);
+
+	// Rebuilds the bounds and the chunky triangle mesh, which is what the navmesh builder
+	// actually reads.
+	return m_collisionMesh->finalize();
 }
 
 

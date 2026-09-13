@@ -112,6 +112,7 @@ public:
 
 	std::shared_ptr<NavMesh> GetNavMesh() const { return m_navMesh; }
 	std::shared_ptr<NavMeshProject> GetNavMeshProj() const { return m_navMeshProj; }
+	std::shared_ptr<ZoneProject> GetZoneProj() const { return m_zoneProj; }
 
 	void setTool(Tool* tool);
 	ToolState* getToolState(ToolType type) const;
