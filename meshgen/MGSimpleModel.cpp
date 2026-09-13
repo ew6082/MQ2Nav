@@ -167,10 +167,13 @@ bool MGSimpleModel::BuildGPUBuffers()
 		{
 			SPDLOG_ERROR("MGSimpleModel::BuildGPUBuffers: '{}' has non-finite vertices", def->m_tag);
 		}
-		else if (glm::length(hi - lo) > 6000.0f)
+		else
 		{
-			SPDLOG_WARN("MGSimpleModel::BuildGPUBuffers: '{}' spans {:.0f} units "
-				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f}) - larger than a zone",
+			// Logged for every model, not just outliers: a zone is only a few thousand
+			// units across, so a model that is merely several times too big never trips a
+			// fixed threshold but still fills the view.
+			SPDLOG_DEBUG("MGSimpleModel::BuildGPUBuffers: '{}' spans {:.0f} units "
+				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f})",
 				def->m_tag, glm::length(hi - lo), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
 		}
 	}

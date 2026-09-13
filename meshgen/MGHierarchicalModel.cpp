@@ -266,10 +266,13 @@ bool MGHierarchicalModel::BuildGPUBuffers()
 			SPDLOG_ERROR("MGHierarchicalModel::BuildGPUBuffers: '{}' has non-finite vertices after skinning",
 				definition->m_tag);
 		}
-		else if (glm::length(hi - lo) > 6000.0f)
+		else
 		{
-			SPDLOG_WARN("MGHierarchicalModel::BuildGPUBuffers: '{}' spans {:.0f} units after skinning "
-				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f}) - larger than a zone",
+			// These are the animated models. Their motion lives in a .ani that eqglib does
+			// not read, so what gets drawn is the unposed default bone state - worth being
+			// able to see the resulting size directly.
+			SPDLOG_DEBUG("MGHierarchicalModel::BuildGPUBuffers: '{}' spans {:.0f} units after skinning "
+				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f})",
 				definition->m_tag, glm::length(hi - lo), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
 		}
 	}
