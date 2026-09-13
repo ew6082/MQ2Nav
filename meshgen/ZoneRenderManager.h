@@ -215,11 +215,6 @@ public:
 	bool GetDrawAreaVolumes() const;
 	void SetDrawAreaVolumes(bool draw);
 
-	// A zone's water and lava volumes are authored as long chains of small boxes, which
-	// clutters the textured view badly while still being wanted over the collision view.
-	bool GetHideAreaVolumesWhenTextured() const { return m_hideAreaVolumesWhenTextured; }
-	void SetHideAreaVolumesWhenTextured(bool hide) { m_hideAreaVolumesWhenTextured = hide; }
-
 	bool GetDrawInvisibleWalls() const;
 	void SetDrawInvisibleWalls(bool draw);
 
@@ -264,7 +259,6 @@ private:
 	std::unique_ptr<SkeletalMeshRenderSystem> m_skeletalMeshSystem;
 	std::unique_ptr<RenderBatchManager> m_renderBatchManager;
 	GeometryRenderMode m_geometryRenderMode = GeometryRenderMode::Models;
-	bool m_hideAreaVolumesWhenTextured = false;
 	float m_pointSize = 0.5f;
 
 	std::vector<PointInstanceVertex> m_points;

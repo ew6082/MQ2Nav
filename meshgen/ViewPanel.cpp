@@ -53,26 +53,18 @@ void ViewPanel::OnImGuiRender(bool* p_open)
 			renderManager->SetUsePointLightShading(usePointLightShading);
 
 		ImGui::EndDisabled();
-		ImGui::Unindent();
 
+		// Left enabled with Draw Textured off: the volumes draw over the collision view
+		// too, so being unable to turn them off there would be unhelpful.
 		bool drawAreaVolumes = renderManager->GetDrawAreaVolumes();
 		if (ImGui::Checkbox("Area Volumes", &drawAreaVolumes))
 			renderManager->SetDrawAreaVolumes(drawAreaVolumes);
 
-		ImGui::Indent();
-		ImGui::BeginDisabled(!drawAreaVolumes);
-
-		bool hideWhenTextured = renderManager->GetHideAreaVolumesWhenTextured();
-		if (ImGui::Checkbox("Hide in textured view", &hideWhenTextured))
-			renderManager->SetHideAreaVolumesWhenTextured(hideWhenTextured);
-
 		if (ImGui::IsItemHovered())
 		{
-			ImGui::SetTooltip("Keep the zone's water and lava volumes out of the textured view,"
-				" while still drawing them over the collision view");
+			ImGui::SetTooltip("The zone's own water, lava and teleport volumes");
 		}
 
-		ImGui::EndDisabled();
 		ImGui::Unindent();
 
 		bool drawGrid = renderManager->GetDrawGrid();

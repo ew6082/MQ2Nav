@@ -448,6 +448,12 @@ void ZoneRenderManager::RenderEntities()
 	if (!m_project || !m_project->GetScene())
 		return;
 
+	// This draws the zone's own areas - water, lava, teleports - as coloured boxes, while
+	// AreaVolumeRenderSystem handles the convex WLD areas. The Area Volumes toggle only
+	// ever reached that system, so it had no effect on these; honour it here too.
+	if (!GetDrawAreaVolumes())
+		return;
+
 	const auto& scene = m_project->GetScene();
 	auto& registry = scene->GetRegistry();
 
@@ -560,10 +566,7 @@ void ZoneRenderManager::Render()
 
 		m_navMeshRender->Render();
 
-		if (!m_hideAreaVolumesWhenTextured || m_geometryRenderMode == GeometryRenderMode::Collision)
-		{
-			m_areaVolumeSystem->Render();
-		}
+		m_areaVolumeSystem->Render();
 	}
 
 	RenderDebugDraw();
