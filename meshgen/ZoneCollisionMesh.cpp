@@ -198,6 +198,10 @@ void ZoneCollisionMesh::addActor(entt::handle handle, const eqg::Actor* actor)
 	if (handle.any_of<HiddenComponent>())
 		return;
 
+	// Excluded by the user in the Scene Objects list. Still drawn, just not collided with.
+	if (handle.any_of<CollisionExcludedComponent>())
+		return;
+
 	// Get model transform
 	glm::mat4 mtx = GetWorldSpaceTransformMatrix(handle);
 
