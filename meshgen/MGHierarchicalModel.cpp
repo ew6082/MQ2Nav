@@ -272,8 +272,8 @@ bool MGHierarchicalModel::BuildGPUBuffers()
 			// not read, so what gets drawn is the unposed default bone state - worth being
 			// able to see the resulting size directly.
 			SPDLOG_DEBUG("MGHierarchicalModel::BuildGPUBuffers: '{}' spans {:.0f} units after skinning "
-				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f})",
-				definition->m_tag, glm::length(hi - lo), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f}), {} bones",
+				definition->m_tag, glm::length(hi - lo), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, numBones);
 		}
 	}
 
