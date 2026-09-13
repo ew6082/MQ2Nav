@@ -52,6 +52,12 @@ public:
 	// is the ones the patch used to cover as well as the ones it covers now.
 	std::vector<dtTileRef> updatePatch(uint32_t id, const std::vector<glm::vec3>& verts);
 
+	// Opens a patch for editing, reading its values into the buffer below.
+	void beginEdit(const MeshPatch* patch);
+
+	// Writes the buffer back to the patch being edited.
+	std::vector<dtTileRef> saveEdit();
+
 	// The default width only makes sense once the agent radius is known, and there is no
 	// navmesh yet when the tool is constructed.
 	void initWidthFromConfig();
@@ -80,6 +86,18 @@ private:
 	// reads off in game. The position is the corner, not the center.
 	glm::vec3 m_blockPos{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 m_blockSize{ 20.0f, 20.0f, 4.0f };
+
+	// The patch open for editing and its values in flight. Editing writes here rather than to
+	// the patch, because applying a change regenerates the whole collision mesh - far too
+	// expensive to do per keystroke, and reading the patch back every frame would snap a
+	// slider to where the drag started. Only one patch is open at a time so there is never a
+	// second copy of these fighting over the same buffer.
+	uint32_t m_editId = 0;
+	bool m_editSupported = false;
+	bool m_editModified = false;
+	glm::vec3 m_editPos{};   // block: center of the top face. surface: start point
+	glm::vec3 m_editSize{};  // block: L W H.                  surface: end point
+	float m_editWidth = 0.0f;
 
 	uint32_t m_currentPatchId = 0;
 };

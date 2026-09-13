@@ -468,6 +468,12 @@ bool ZoneProject::BuildCollisionMesh()
 	{
 		AddMeshPatchesToCollisionMesh();
 
+		// The resource manager finalized the mesh before returning, which was before the
+		// patches went in. Without this their triangles sit in the vertex list but never
+		// reach the chunky tri mesh, which is the only thing the builder reads - so the
+		// patches would quietly do nothing on every full rebuild.
+		m_collisionMesh->finalize();
+
 		m_meshBMin = m_collisionMesh->m_boundsMin;
 		m_meshBMax = m_collisionMesh->m_boundsMax;
 

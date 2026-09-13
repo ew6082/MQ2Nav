@@ -61,28 +61,34 @@ static bool SurfaceEndsFromRing(const std::vector<glm::vec3>& verts,
 	return true;
 }
 
-// Editing an existing patch regenerates the collision mesh and rebuilds tiles, so a commit
-// per keystroke or per frame of a slider drag would be unusable. These report a change only
-// once the widget is finished with - Enter pressed, or focus moved away.
-static bool EditVec3(const char* label, glm::vec3& v)
+// ImGui only offers the +/- step buttons on the single component form, so a stepped vec3 has
+// to be three rows. Worth the space where a value is nudged into place rather than typed.
+// The labels are the EQ axis names, in the order these fields are already stored, so they
+// read the same way as a position does in game.
+static bool SteppedVec3(const char* id, const char* const (&labels)[3], glm::vec3& v, float step)
 {
-	ImGui::InputFloat3(label, glm::value_ptr(v));
-	return ImGui::IsItemDeactivatedAfterEdit();
+	bool changed = false;
+
+	ImGui::PushID(id);
+
+	for (int i = 0; i < 3; ++i)
+		changed |= ImGui::InputFloat(labels[i], &v[i], step, step * 10.0f, "%.1f");
+
+	ImGui::PopID();
+
+	return changed;
 }
 
-static bool EditWidth(float& width)
+// Sets a vec3 field from the camera. Used by the creator and by both editors, since flying
+// to the spot beats reading coordinates off somewhere else and typing them in. The id is
+// needed because several of these can be visible at once.
+static bool CameraButton(const char* id, glm::vec3& outPosEq)
 {
-	ImGui::SliderFloat("Width", &width, 1.0f, 100.0f, "%.1f");
-	return ImGui::IsItemDeactivatedAfterEdit();
-}
+	ImGui::PushID(id);
+	const bool clicked = ImGui::SmallButton("From Camera");
+	ImGui::PopID();
 
-// Sets a vec3 field from the camera. Used by both the creator and the editors, since flying
-// to the spot beats reading coordinates off somewhere else and typing them in.
-static bool CameraButton(glm::vec3& outPosEq)
-{
-	ImGui::SameLine();
-
-	if (!ImGui::SmallButton("Camera"))
+	if (!clicked)
 		return false;
 
 	Editor* editor = Application::Get().GetEditor();
@@ -166,10 +172,15 @@ void MeshPatchTool::handleMenu()
 			" of the top face - the surface that gets walked on - in the same coordinates the"
 			" tester tool uses. The block hangs below it.");
 
-		ImGui::InputFloat3("Position", glm::value_ptr(m_state->m_blockPos));
-		CameraButton(m_state->m_blockPos);
+		static const char* const posLabels[3] = { "Y", "X", "Z" };
+		static const char* const sizeLabels[3] = { "L", "W", "H" };
 
-		ImGui::InputFloat3("Size (L W H)", glm::value_ptr(m_state->m_blockSize));
+		ImGui::TextUnformatted("Position (top face center)");
+		SteppedVec3("newpos", posLabels, m_state->m_blockPos, 1.0f);
+		CameraButton("newposcam", m_state->m_blockPos);
+
+		ImGui::TextUnformatted("Size");
+		SteppedVec3("newsize", sizeLabels, m_state->m_blockSize, 1.0f);
 
 		if (ImGui::Button("Create Block"))
 		{
@@ -188,10 +199,9 @@ void MeshPatchTool::handleMenu()
 
 	uint32_t deleteId = 0;
 
-	// Edits are applied after the loop: applying one regenerates the collision mesh and
-	// rebuilds tiles, which is not something to be doing while walking the patch list.
-	uint32_t editId = 0;
-	std::vector<glm::vec3> editVerts;
+	// Saving is deferred to after the loop: it regenerates the collision mesh and rebuilds
+	// tiles, which is not something to be doing while walking the patch list.
+	bool save = false;
 
 	for (size_t i = 0; i < count; ++i)
 	{
@@ -203,58 +213,64 @@ void MeshPatchTool::handleMenu()
 			? fmt::format("{} {}", patch->type == MeshPatchType::Box ? "Block" : "Patch", patch->id)
 			: patch->name;
 
-		bool open = ImGui::TreeNode(label.c_str());
+		// Driven from the edit buffer rather than from ImGui's own storage, so that only one
+		// patch is ever open. The buffer holds a single patch, and two open editors would
+		// otherwise overwrite each other's values every frame.
+		ImGui::SetNextItemOpen(m_state->m_editId == patch->id);
+
+		const bool open = ImGui::TreeNode(label.c_str());
 
 		ImGui::SameLine();
 
 		if (ImGui::SmallButton("Delete"))
 			deleteId = patch->id;
 
+		if (open && m_state->m_editId != patch->id)
+			m_state->beginEdit(patch);
+		else if (!open && m_state->m_editId == patch->id)
+			m_state->m_editId = 0;
+
 		if (open)
 		{
-			if (patch->type == MeshPatchType::Box && patch->verts.size() >= 2)
+			if (!m_state->m_editSupported)
 			{
-				glm::vec3 pos, size;
-				BlockTopCenterFromCorners(patch->verts[0], patch->verts[1], pos, size);
+				ImGui::TextDisabled("%d vertices - not a two point patch, so not editable here.",
+					static_cast<int>(patch->verts.size()));
+			}
+			else if (patch->type == MeshPatchType::Box)
+			{
+				static const char* const posLabels[3] = { "Y", "X", "Z" };
+				static const char* const sizeLabels[3] = { "L", "W", "H" };
 
-				bool changed = EditVec3("Position", pos);
-				changed |= CameraButton(pos);
-				changed |= EditVec3("Size (L W H)", size);
+				ImGui::TextUnformatted("Position (top face center)");
+				m_state->m_editModified |= SteppedVec3("pos", posLabels, m_state->m_editPos, 1.0f);
+				m_state->m_editModified |= CameraButton("poscam", m_state->m_editPos);
 
-				if (changed && size.x != 0.0f && size.y != 0.0f && size.z != 0.0f)
-				{
-					glm::vec3 lo, hi;
-					BlockCornersFromTopCenter(pos, size, lo, hi);
-
-					editId = patch->id;
-					editVerts = { lo, hi };
-				}
+				ImGui::TextUnformatted("Size");
+				m_state->m_editModified |= SteppedVec3("size", sizeLabels, m_state->m_editSize, 1.0f);
 			}
 			else
 			{
-				glm::vec3 start, end;
-				float width;
+				m_state->m_editModified |=
+					ImGui::InputFloat3("Start", glm::value_ptr(m_state->m_editPos));
+				m_state->m_editModified |= CameraButton("startcam", m_state->m_editPos);
 
-				if (SurfaceEndsFromRing(patch->verts, start, end, width))
-				{
-					bool changed = EditVec3("Start", start);
-					changed |= CameraButton(start);
-					changed |= EditVec3("End", end);
-					changed |= CameraButton(end);
-					changed |= EditWidth(width);
+				m_state->m_editModified |=
+					ImGui::InputFloat3("End", glm::value_ptr(m_state->m_editSize));
+				m_state->m_editModified |= CameraButton("endcam", m_state->m_editSize);
 
-					if (changed)
-					{
-						editId = patch->id;
-						editVerts = MeshPatchToolState::BuildPatchRing(
-							from_eq_coord(start), from_eq_coord(end), width);
-					}
-				}
-				else
-				{
-					ImGui::TextDisabled("%d vertices - not a two point patch, so not editable here.",
-						static_cast<int>(patch->verts.size()));
-				}
+				m_state->m_editModified |=
+					ImGui::SliderFloat("Width", &m_state->m_editWidth, 1.0f, 100.0f, "%.1f");
+			}
+
+			if (m_state->m_editSupported)
+			{
+				ImGui::BeginDisabled(!m_state->m_editModified);
+
+				if (ImGui::Button("Save Changes"))
+					save = true;
+
+				ImGui::EndDisabled();
 			}
 
 			ImGui::TreePop();
@@ -263,9 +279,9 @@ void MeshPatchTool::handleMenu()
 		ImGui::PopID();
 	}
 
-	if (editId != 0)
+	if (save)
 	{
-		auto modifiedTiles = m_state->updatePatch(editId, editVerts);
+		auto modifiedTiles = m_state->saveEdit();
 
 		if (!modifiedTiles.empty())
 			m_meshTool->RebuildTiles(modifiedTiles);
@@ -277,6 +293,10 @@ void MeshPatchTool::handleMenu()
 		auto modifiedTiles = navMesh->GetTilesIntersectingMeshPatch(deleteId);
 
 		navMesh->DeleteMeshPatchById(deleteId);
+
+		// Deleting renumbers what is left, so a held id would now name a different patch.
+		m_state->m_editId = 0;
+		m_state->m_editModified = false;
 
 		// Geometry can be appended to the collision mesh but not taken back out of it, so
 		// removing a patch means regenerating the whole thing before the tiles rebuild.
@@ -310,6 +330,8 @@ void MeshPatchToolState::reset()
 	m_hitPosSet = false;
 	m_currentPatchId = 0;
 	m_widthInitialized = false;
+	m_editId = 0;
+	m_editModified = false;
 }
 
 void MeshPatchToolState::initWidthFromConfig()
@@ -431,6 +453,56 @@ std::vector<dtTileRef> MeshPatchToolState::updatePatch(uint32_t id, const std::v
 		zoneProj->RebuildCollisionMesh();
 
 	return tiles;
+}
+
+void MeshPatchToolState::beginEdit(const MeshPatch* patch)
+{
+	m_editId = patch->id;
+	m_editModified = false;
+
+	if (patch->type == MeshPatchType::Box)
+	{
+		m_editSupported = patch->verts.size() >= 2;
+
+		if (m_editSupported)
+			BlockTopCenterFromCorners(patch->verts[0], patch->verts[1], m_editPos, m_editSize);
+	}
+	else
+	{
+		m_editSupported = SurfaceEndsFromRing(patch->verts, m_editPos, m_editSize, m_editWidth);
+	}
+}
+
+std::vector<dtTileRef> MeshPatchToolState::saveEdit()
+{
+	auto navMesh = m_meshTool->GetNavMesh();
+	if (!navMesh || m_editId == 0 || !m_editSupported)
+		return {};
+
+	MeshPatch* patch = navMesh->GetMeshPatchById(m_editId);
+	if (!patch)
+		return {};
+
+	std::vector<glm::vec3> verts;
+
+	if (patch->type == MeshPatchType::Box)
+	{
+		if (m_editSize.x == 0.0f || m_editSize.y == 0.0f || m_editSize.z == 0.0f)
+			return {};
+
+		glm::vec3 lo, hi;
+		BlockCornersFromTopCenter(m_editPos, m_editSize, lo, hi);
+
+		verts = { lo, hi };
+	}
+	else
+	{
+		verts = BuildPatchRing(from_eq_coord(m_editPos), from_eq_coord(m_editSize), m_editWidth);
+	}
+
+	m_editModified = false;
+
+	return updatePatch(m_editId, verts);
 }
 
 void MeshPatchToolState::handleRender()
