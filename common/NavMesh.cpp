@@ -986,6 +986,46 @@ ConvexVolume* NavMesh::GetConvexVolumeById(uint32_t id)
 	return nullptr;
 }
 
+std::vector<dtTileRef> NavMesh::GetTilesIntersectingMeshPatch(uint32_t id)
+{
+	std::vector<dtTileRef> tiles;
+	auto patch = GetMeshPatchById(id);
+
+	if (m_navMesh && patch && patch->verts.size() > 1)
+	{
+		glm::vec3 bmin = patch->verts[0], bmax = patch->verts[0];
+		for (const auto& vert : patch->verts)
+		{
+			bmin = glm::min(bmin, vert);
+			bmax = glm::max(bmax, vert);
+		}
+
+		int minx, miny, maxx, maxy;
+		m_navMesh->calcTileLoc(glm::value_ptr(bmin), &minx, &miny);
+		m_navMesh->calcTileLoc(glm::value_ptr(bmax), &maxx, &maxy);
+
+		static const int MAX_NEIS = 32;
+		const dtMeshTile* neis[MAX_NEIS];
+
+		for (int y = miny; y <= maxy; ++y)
+		{
+			for (int x = minx; x <= maxx; ++x)
+			{
+				const int nneis = m_navMesh->getTilesAt(x, y, neis, MAX_NEIS);
+				for (int j = 0; j < nneis; j++)
+				{
+					tiles.push_back(m_navMesh->getTileRef(neis[j]));
+				}
+			}
+		}
+
+		std::sort(tiles.begin(), tiles.end());
+		tiles.erase(std::unique(tiles.begin(), tiles.end()), tiles.end());
+	}
+
+	return tiles;
+}
+
 std::vector<dtTileRef> NavMesh::GetTilesIntersectingConvexVolume(uint32_t id)
 {
 	std::vector<dtTileRef> tiles;

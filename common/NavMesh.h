@@ -218,6 +218,8 @@ public:
 	MeshPatch* GetMeshPatchById(uint32_t id);
 	void DeleteMeshPatchById(uint32_t id);
 
+	std::vector<dtTileRef> GetTilesIntersectingMeshPatch(uint32_t id);
+
 	//------------------------------------------------------------------------
 	// off-mesh connections
 
