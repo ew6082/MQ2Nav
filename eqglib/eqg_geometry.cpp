@@ -1104,6 +1104,43 @@ bool HierarchicalModelDefinition::InitFromEQMData(
 	InitBonesFromEQMData(bones);
 	InitSkinFromEQMData(vertices, faces, skinData);
 
+	// Nothing ever built a collision mesh for an EQG hierarchical model - SetCollisionMesh
+	// is only called from the WLD loader - so m_hasCollision stayed false, HierarchicalActor
+	// reported itself not collidable, and these models were left out of the zone's collision
+	// mesh with nothing logged to say so. Derive one from the skin geometry, using the same
+	// collidable-face test as SFace and the same file-to-world swizzle the renderer applies,
+	// so collision lines up with what is drawn.
+	if (m_collisionVertices.empty() && !vertices.empty() && !faces.empty())
+	{
+		std::vector<glm::vec3> collisionVertices;
+		collisionVertices.reserve(vertices.size());
+
+		for (const SEQMVertex& vertex : vertices)
+			collisionVertices.push_back(vertex.pos.yzx);
+
+		std::vector<uint32_t> collisionIndices;
+		collisionIndices.reserve(faces.size() * 3);
+
+		for (const SEQMFace& face : faces)
+		{
+			if ((face.flags & EQG_FACEFLAG_COLLISION_REQUIRED) == 0
+				&& (face.flags & EQG_FACEFLAG_PASSABLE) != 0)
+			{
+				continue;
+			}
+
+			collisionIndices.push_back(face.vertices[0]);
+			collisionIndices.push_back(face.vertices[1]);
+			collisionIndices.push_back(face.vertices[2]);
+		}
+
+		if (!collisionIndices.empty())
+		{
+			m_collisionVertices = std::move(collisionVertices);
+			m_collisionIndices = std::move(collisionIndices);
+		}
+	}
+
 	InitCollisionData();
 
 	// TODO: Init points
