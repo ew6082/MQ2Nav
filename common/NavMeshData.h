@@ -164,6 +164,11 @@ enum struct MeshPatchType : uint8_t
 	// surface alone would not do: standing a landing up out of nothing, or filling a crack
 	// that the floor geometry falls through.
 	Box = 1,
+
+	// A run of quads, held as consecutive left/right pairs of vertices along its length. A
+	// ring has to be planar to triangulate as a fan, which rules out a ramp that flattens
+	// into a lip at each end - and a steep ramp needs exactly that to join what it climbs to.
+	Strip = 2,
 };
 
 struct MeshPatch

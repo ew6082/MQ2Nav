@@ -59,40 +59,32 @@ static void BlockTopCenterFromCorners(const glm::vec3& c0, const glm::vec3& c1,
 // alone rather than made to overshoot into geometry that did not need it.
 static constexpr float kSteepPatchSlopeDegrees = 15.0f;
 
-static void ExtendSteepEnds(glm::vec3& from, glm::vec3& to, float extension)
+static bool IsSteep(const glm::vec3& from, const glm::vec3& to, float& outRun, glm::vec3& outDir)
 {
-	if (extension <= 0.0f)
-		return;
-
 	const glm::vec3 flat{ to.x - from.x, 0.0f, to.z - from.z };
-	const float run = glm::length(flat);
 
-	// Purely vertical, so there is no direction of travel to overshoot along.
-	if (run < 1e-4f)
-		return;
+	outRun = glm::length(flat);
 
-	const float rise = std::abs(to.y - from.y);
+	// Purely vertical, so there is no direction of travel to lay a lip along.
+	if (outRun < 1e-4f)
+		return false;
 
-	if (glm::degrees(std::atan2(rise, run)) < kSteepPatchSlopeDegrees)
-		return;
+	outDir = flat / outRun;
 
-	const glm::vec3 dir = flat / run;
-
-	from -= dir * extension;
-	to += dir * extension;
+	return glm::degrees(std::atan2(std::abs(to.y - from.y), outRun)) >= kSteepPatchSlopeDegrees;
 }
 
-// The ring a surface patch is built from is recoverable: BuildPatchRing lays down the two
-// ends in order, so each end is the midpoint of its own pair and the width is the span
-// between them. Anything not built that way is left alone rather than guessed at.
+// The four vertex ring older patches were built from, before strips: the two ends were laid
+// down in order, so each is the midpoint of its own pair and the width is the span between
+// them. Anything not built that way is left alone rather than guessed at.
 static bool SurfaceEndsFromRing(const std::vector<glm::vec3>& verts,
-	glm::vec3& outStartEq, glm::vec3& outEndEq, float& outWidth)
+	glm::vec3& outStart, glm::vec3& outEnd, float& outWidth)
 {
 	if (verts.size() != 4)
 		return false;
 
-	outStartEq = to_eq_coord((verts[0] + verts[1]) * 0.5f);
-	outEndEq = to_eq_coord((verts[2] + verts[3]) * 0.5f);
+	outStart = (verts[0] + verts[1]) * 0.5f;
+	outEnd = (verts[2] + verts[3]) * 0.5f;
 	outWidth = glm::length(verts[1] - verts[0]);
 
 	return true;
@@ -436,15 +428,14 @@ std::vector<dtTileRef> MeshPatchToolState::addBlock()
 	return commitPatch(patch);
 }
 
-std::vector<glm::vec3> MeshPatchToolState::BuildPatchRing(
-	const glm::vec3& from, const glm::vec3& to, float width)
+std::vector<glm::vec3> MeshPatchToolState::BuildPatchStrip(
+	const glm::vec3& from, const glm::vec3& to, float width, float extension)
 {
 	// Widen across the horizontal direction of travel. A patch bridging a gap wants to be
 	// perpendicular to the crossing, and staying horizontal keeps the width honest however
 	// steep the span is - widening in the plane of a steep slope would pinch it once
 	// projected back down.
-	glm::vec3 along = to - from;
-	glm::vec3 flat{ along.x, 0.0f, along.z };
+	glm::vec3 flat{ to.x - from.x, 0.0f, to.z - from.z };
 
 	if (glm::dot(flat, flat) < 1e-6f)
 	{
@@ -453,9 +444,61 @@ std::vector<glm::vec3> MeshPatchToolState::BuildPatchRing(
 		flat = glm::vec3{ 1.0f, 0.0f, 0.0f };
 	}
 
-	glm::vec3 side = glm::normalize(glm::vec3{ -flat.z, 0.0f, flat.x }) * (width * 0.5f);
+	const glm::vec3 side = glm::normalize(glm::vec3{ -flat.z, 0.0f, flat.x }) * (width * 0.5f);
 
-	return { from - side, from + side, to + side, to - side };
+	// The run itself is always the middle two pairs, so the clicked points are recoverable
+	// whether or not lips were laid - which is what keeps a re-save from growing the patch.
+	std::vector<glm::vec3> verts;
+	verts.reserve(8);
+
+	float run;
+	glm::vec3 dir;
+	const bool lips = extension > 0.0f && IsSteep(from, to, run, dir);
+
+	// A lip continues from the clicked point horizontally, at that point's own height, so the
+	// surface arrives at what it is joining rather than short of it. Extending the ramp
+	// itself instead would either tilt it - putting the end below where it was clicked, which
+	// is worse than doing nothing - or float it above, if extended along its own slope.
+	if (lips)
+	{
+		const glm::vec3 lip = from - dir * extension;
+		verts.push_back(lip - side);
+		verts.push_back(lip + side);
+	}
+
+	verts.push_back(from - side);
+	verts.push_back(from + side);
+	verts.push_back(to - side);
+	verts.push_back(to + side);
+
+	if (lips)
+	{
+		const glm::vec3 lip = to + dir * extension;
+		verts.push_back(lip - side);
+		verts.push_back(lip + side);
+	}
+
+	return verts;
+}
+
+// Recovers the clicked points from a strip. The run is the middle pair of pairs when lips
+// were laid and the whole thing when they were not, so what comes back is where the user
+// clicked either way and re-saving lays the lips afresh rather than on top of the old ones.
+bool MeshPatchToolState::StripEnds(const std::vector<glm::vec3>& verts,
+	glm::vec3& outStart, glm::vec3& outEnd, float& outWidth)
+{
+	const size_t pairs = verts.size() / 2;
+
+	if (verts.size() % 2 != 0 || (pairs != 2 && pairs != 4))
+		return false;
+
+	const size_t first = (pairs == 4) ? 2 : 0;
+
+	outStart = (verts[first] + verts[first + 1]) * 0.5f;
+	outEnd = (verts[first + 2] + verts[first + 3]) * 0.5f;
+	outWidth = glm::length(verts[first + 1] - verts[first]);
+
+	return true;
 }
 
 std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, bool shift)
@@ -474,14 +517,9 @@ std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, 
 
 	m_hitPosSet = false;
 
-	// Applied here rather than in BuildPatchRing, so that editing a patch afterwards moves it
-	// to exactly where the fields say. Extending again on every save would creep.
-	glm::vec3 from = m_hitPos;
-	glm::vec3 to = p;
-	ExtendSteepEnds(from, to, m_endExtension);
-
 	MeshPatch* patch = navMesh->AddMeshPatch(
-		BuildPatchRing(from, to, m_width), std::string());
+		BuildPatchStrip(m_hitPos, p, m_width, m_endExtension), std::string(),
+		MeshPatchType::Strip);
 
 	return commitPatch(patch);
 }
@@ -531,7 +569,17 @@ void MeshPatchToolState::beginEdit(const MeshPatch* patch)
 	}
 	else
 	{
-		m_editSupported = SurfaceEndsFromRing(patch->verts, m_editPos, m_editSize, m_editWidth);
+		glm::vec3 start, end;
+
+		m_editSupported = (patch->type == MeshPatchType::Strip)
+			? StripEnds(patch->verts, start, end, m_editWidth)
+			: SurfaceEndsFromRing(patch->verts, start, end, m_editWidth);
+
+		if (m_editSupported)
+		{
+			m_editPos = to_eq_coord(start);
+			m_editSize = to_eq_coord(end);
+		}
 	}
 }
 
@@ -567,7 +615,13 @@ std::vector<dtTileRef> MeshPatchToolState::saveEdit()
 	}
 	else
 	{
-		verts = BuildPatchRing(from_eq_coord(m_editPos), from_eq_coord(m_editSize), m_editWidth);
+		// Rebuilt as a strip whatever it was, so an older four vertex patch picks up the end
+		// lips the first time it is saved. StripEnds gives back the clicked points rather
+		// than the lip ends, so this does not stack a second set of lips on the first.
+		verts = BuildPatchStrip(from_eq_coord(m_editPos), from_eq_coord(m_editSize),
+			m_editWidth, m_endExtension);
+
+		patch->type = MeshPatchType::Strip;
 	}
 
 	// A rename on its own leaves the geometry alone, and regenerating the collision mesh for
@@ -618,10 +672,30 @@ void MeshPatchToolState::handleRender()
 			continue;
 		}
 
-		for (size_t j = 0; j < n; ++j)
+		// A strip is pairs along its length rather than a ring, so walk one side out and the
+		// other back to get a perimeter. Legacy four vertex patches are already a ring.
+		std::vector<glm::vec3> ring;
+
+		if (patch->type == MeshPatchType::Strip)
 		{
-			const glm::vec3& a = patch->verts[j];
-			const glm::vec3& b = patch->verts[(j + 1) % n];
+			if (n < 4)
+				continue;
+
+			for (size_t j = 0; j < n; j += 2)
+				ring.push_back(patch->verts[j]);
+
+			for (size_t j = n; j > 0; j -= 2)
+				ring.push_back(patch->verts[j - 1]);
+		}
+		else
+		{
+			ring.assign(patch->verts.begin(), patch->verts.end());
+		}
+
+		for (size_t j = 0; j < ring.size(); ++j)
+		{
+			const glm::vec3& a = ring[j];
+			const glm::vec3& b = ring[(j + 1) % ring.size()];
 
 			dd.vertex(a.x, a.y + 0.1f, a.z, color);
 			dd.vertex(b.x, b.y + 0.1f, b.z, color);

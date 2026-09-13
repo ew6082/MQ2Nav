@@ -62,9 +62,15 @@ public:
 	// are known, and there is no navmesh yet when the tool is constructed.
 	void initDefaultsFromConfig();
 
-	// Builds the quad for a patch spanning from one point to another. Kept separate so the
-	// width can be changed after the fact without re-clicking.
-	static std::vector<glm::vec3> BuildPatchRing(const glm::vec3& from, const glm::vec3& to, float width);
+	// Builds the strip for a patch spanning from one point to another, as left/right pairs
+	// along its length. A steep run gets a flat lip at each end so that it arrives at what it
+	// is joining instead of stopping inside the band Recast strips back from every drop-off.
+	static std::vector<glm::vec3> BuildPatchStrip(const glm::vec3& from, const glm::vec3& to,
+		float width, float extension);
+
+	// Recovers the clicked points and width from a strip built by the above.
+	static bool StripEnds(const std::vector<glm::vec3>& verts, glm::vec3& outStart,
+		glm::vec3& outEnd, float& outWidth);
 
 private:
 	// Puts a new patch's geometry into the collision mesh and returns the tiles to rebuild.

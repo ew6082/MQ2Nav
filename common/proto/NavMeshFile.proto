@@ -179,6 +179,9 @@ enum MeshPatchType
 
 	// A solid box, held as exactly two opposite corners in vertices rather than a ring.
 	Box = 1;
+
+	// A run of quads, held in vertices as consecutive left/right pairs along its length.
+	Strip = 2;
 }
 
 message MeshPatch

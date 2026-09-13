@@ -531,26 +531,46 @@ static void AddBoxTriangles(ZoneCollisionMesh& collisionMesh, const glm::vec3& c
 		collisionMesh.addTriangle(v[f[0]], v[f[1]], v[f[2]]);
 }
 
-static void AddPatchTriangles(ZoneCollisionMesh& collisionMesh, const MeshPatch& patch)
+// Strips are pairs of vertices along a run, each consecutive pair of pairs making a quad.
+// Every quad is triangulated on its own, so unlike a fan the run does not have to be planar.
+static void AddStripTriangles(ZoneCollisionMesh& collisionMesh, const std::vector<glm::vec3>& verts)
 {
-	if (patch.type == MeshPatchType::Box)
+	for (size_t i = 0; i + 3 < verts.size(); i += 2)
 	{
-		if (patch.verts.size() >= 2)
-			AddBoxTriangles(collisionMesh, patch.verts[0], patch.verts[1]);
-
-		return;
-	}
-
-	for (size_t i = 1; i + 1 < patch.verts.size(); ++i)
-	{
-		AddUpwardTriangle(collisionMesh, patch.verts[0], patch.verts[i], patch.verts[i + 1]);
+		AddUpwardTriangle(collisionMesh, verts[i], verts[i + 1], verts[i + 3]);
+		AddUpwardTriangle(collisionMesh, verts[i], verts[i + 3], verts[i + 2]);
 	}
 }
 
-// A surface needs a ring; a box needs only its two corners.
+static void AddPatchTriangles(ZoneCollisionMesh& collisionMesh, const MeshPatch& patch)
+{
+	switch (patch.type)
+	{
+	case MeshPatchType::Box:
+		if (patch.verts.size() >= 2)
+			AddBoxTriangles(collisionMesh, patch.verts[0], patch.verts[1]);
+		break;
+
+	case MeshPatchType::Strip:
+		AddStripTriangles(collisionMesh, patch.verts);
+		break;
+
+	default:
+		for (size_t i = 1; i + 1 < patch.verts.size(); ++i)
+			AddUpwardTriangle(collisionMesh, patch.verts[0], patch.verts[i], patch.verts[i + 1]);
+		break;
+	}
+}
+
+// A box needs only its two corners, a strip needs at least two pairs, a surface a ring.
 static bool IsPatchUsable(const MeshPatch& patch)
 {
-	return patch.verts.size() >= (patch.type == MeshPatchType::Box ? 2u : 3u);
+	switch (patch.type)
+	{
+	case MeshPatchType::Box:   return patch.verts.size() >= 2;
+	case MeshPatchType::Strip: return patch.verts.size() >= 4 && patch.verts.size() % 2 == 0;
+	default:                   return patch.verts.size() >= 3;
+	}
 }
 
 void ZoneProject::AddMeshPatchesToCollisionMesh()
