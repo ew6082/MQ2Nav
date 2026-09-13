@@ -72,6 +72,10 @@ public:
 	static bool StripEnds(const std::vector<glm::vec3>& verts, glm::vec3& outStart,
 		glm::vec3& outEnd, float& outWidth);
 
+	// Moves a clicked point up to the topmost surface over it, within the search height.
+	// Returns the point unchanged if there is nothing above it.
+	glm::vec3 SnapToTopSurface(const glm::vec3& p) const;
+
 private:
 	// Puts a new patch's geometry into the collision mesh and returns the tiles to rebuild.
 	std::vector<dtTileRef> commitPatch(MeshPatch* patch);
@@ -92,6 +96,13 @@ private:
 	// to ends inside that dead band and comes out disconnected. Flat patches meet coplanar
 	// ground with no drop-off and are left alone. Set from the config on first use.
 	float m_endExtension = 6.0f;
+
+	// Clicking a block tends to land on whichever face the ray met first, which is often the
+	// underside or a vertical side rather than the surface being aimed at. With this on, a
+	// click is lifted to the topmost surface over it. Off by default and bounded by a search
+	// height, since a patch deliberately laid under something is a legitimate thing to want.
+	bool m_snapToTop = false;
+	float m_snapSearchHeight = 15.0f;
 
 	bool m_defaultsInitialized = false;
 

@@ -172,15 +172,22 @@ void MeshPatchTool::handleMenu()
 
 	ImGui::SliderFloat("Width", &m_state->m_width, 1.0f, 100.0f, "%.1f");
 
-	// Recast erodes the walkable area by the agent radius on each side, so a strip narrower
-	// than twice that produces no walkable surface at all - it would look like the patch had
-	// simply not worked.
-	const float minUsefulWidth = agentRadius * 2.0f;
-	if (m_state->m_width <= minUsefulWidth)
+	// A raised strip has a drop on either side, so it loses a cell to rcFilterLedgeSpans and
+	// an agent radius to rcErodeWalkableArea on each. Only what is left over is walkable, and
+	// a patch that comes out with nothing looks exactly like a patch that did not work.
+	const float deadBand = (agentRadius + navMesh->GetNavMeshConfig().cellSize) * 2.0f;
+	const float usableWidth = m_state->m_width - deadBand;
+
+	if (usableWidth <= 0.0f)
 	{
 		ImGui::TextColored(ImColor(255, 128, 0),
-			"Too narrow: erosion takes %.1f off each side, so nothing walkable will remain."
-			" Use more than %.1f.", agentRadius, minUsefulWidth);
+			"Too narrow: the ledge filter and erosion take %.1f off, so nothing walkable will"
+			" remain. Use more than %.1f.", deadBand, deadBand);
+	}
+	else
+	{
+		ImGui::TextDisabled("About %.1f units walkable after the ledge filter and erosion.",
+			usableWidth);
 	}
 
 	ImGui::SliderFloat("End Extension", &m_state->m_endExtension, 0.0f, 20.0f, "%.1f");
@@ -193,6 +200,30 @@ void MeshPatchTool::handleMenu()
 			"band and comes out disconnected. Overshooting makes the surfaces\n"
 			"overlap instead. Patches shallower than %.0f degrees are left alone.",
 			kSteepPatchSlopeDegrees);
+	}
+
+	ImGui::Checkbox("Snap To Top", &m_state->m_snapToTop);
+
+	if (ImGui::IsItemHovered())
+	{
+		ImGui::SetTooltip("Lift each click to the highest surface over it.\n\n"
+			"A click lands on whichever face the ray met first, which on a block\n"
+			"is often the underside or a vertical side rather than the top. Off\n"
+			"by default, since a patch laid under something is a valid thing to\n"
+			"want.");
+	}
+
+	if (m_state->m_snapToTop)
+	{
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(120.0f);
+		ImGui::DragFloat("Search Height", &m_state->m_snapSearchHeight, 0.5f, 1.0f, 200.0f, "%.0f");
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("How far above a click to look. Tall enough to clear whatever\n"
+				"was clicked through, short enough not to catch the ceiling.");
+		}
 	}
 
 	if (m_state->m_hitPosSet)
@@ -385,10 +416,11 @@ void MeshPatchToolState::initDefaultsFromConfig()
 
 	const NavMeshConfig& config = navMesh->GetNavMeshConfig();
 
-	// The narrowest strip that survives erosion, plus a little slack. Patches are mostly used
-	// to define a path through somewhere the generator gave up on, not to floor an area, so
-	// starting wide just means overwriting geometry that did not need it.
-	m_width = config.agentRadius * 2.0f + 2.0f;
+	// A raised strip has a drop on both sides, so it loses a cell to the ledge filter and an
+	// agent radius to erosion on each - that whole band is gone before anything is walkable.
+	// This leaves an agent diameter of walkable surface once the band is taken off both
+	// sides, which is the narrowest thing worth calling a path.
+	m_width = config.agentRadius * 4.0f + config.cellSize * 2.0f;
 
 	// One cell for the ledge filter, one agent radius for erosion, and another as margin so
 	// the surfaces genuinely overlap rather than just touching at the far edge of the band.
@@ -501,15 +533,37 @@ bool MeshPatchToolState::StripEnds(const std::vector<glm::vec3>& verts,
 	return true;
 }
 
+glm::vec3 MeshPatchToolState::SnapToTopSurface(const glm::vec3& p) const
+{
+	auto zoneProj = m_meshTool->GetZoneProj();
+	if (!zoneProj)
+		return p;
+
+	// Straight down from the top of the search window: the nearest hit is the highest surface
+	// over the spot. Starting above the click rather than at it is the point - a click that
+	// landed on an underside or a vertical side is below the surface it was aiming at. The
+	// window is bounded so this finds the block that was clicked and not the ceiling above it.
+	const glm::vec3 src{ p.x, p.y + m_snapSearchHeight, p.z };
+	const glm::vec3 dest{ p.x, p.y - 1.0f, p.z };
+
+	float t;
+	if (!zoneProj->RaycastMesh(src, dest, t))
+		return p;
+
+	return src + (dest - src) * t;
+}
+
 std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, bool shift)
 {
 	auto navMesh = m_meshTool->GetNavMesh();
 	if (!navMesh)
 		return {};
 
+	const glm::vec3 point = m_snapToTop ? SnapToTopSurface(p) : p;
+
 	if (!m_hitPosSet)
 	{
-		m_hitPos = p;
+		m_hitPos = point;
 		m_hitPosSet = true;
 
 		return {};
@@ -518,7 +572,7 @@ std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, 
 	m_hitPosSet = false;
 
 	MeshPatch* patch = navMesh->AddMeshPatch(
-		BuildPatchStrip(m_hitPos, p, m_width, m_endExtension), std::string(),
+		BuildPatchStrip(m_hitPos, point, m_width, m_endExtension), std::string(),
 		MeshPatchType::Strip);
 
 	return commitPatch(patch);
