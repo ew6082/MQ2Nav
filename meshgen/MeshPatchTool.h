@@ -48,6 +48,10 @@ public:
 	// that need rebuilding, empty if the block would be degenerate.
 	std::vector<dtTileRef> addBlock();
 
+	// Replaces an existing patch's geometry. Returns every tile that needs rebuilding, which
+	// is the ones the patch used to cover as well as the ones it covers now.
+	std::vector<dtTileRef> updatePatch(uint32_t id, const std::vector<glm::vec3>& verts);
+
 	// The default width only makes sense once the agent radius is known, and there is no
 	// navmesh yet when the tool is constructed.
 	void initWidthFromConfig();

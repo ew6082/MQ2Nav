@@ -19,6 +19,80 @@
 #include <imgui/misc/cpp/imgui_stdlib.h>
 #include <glm/gtc/type_ptr.hpp>
 
+//
+// A block is entered as the center of its top face, since that is the surface being walked
+// on and the point the user is actually aiming at - standing at the spot and snapshotting
+// the camera then puts the block underfoot. Storage is two opposite corners, so the two
+// conversions below are the only places that know the difference.
+
+static void BlockCornersFromTopCenter(const glm::vec3& posEq, const glm::vec3& sizeEq,
+	glm::vec3& outLo, glm::vec3& outHi)
+{
+	const glm::vec3 center = from_eq_coord(posEq);
+	const glm::vec3 size = glm::abs(from_eq_coord(sizeEq));
+
+	outLo = { center.x - size.x * 0.5f, center.y - size.y, center.z - size.z * 0.5f };
+	outHi = { center.x + size.x * 0.5f, center.y,          center.z + size.z * 0.5f };
+}
+
+static void BlockTopCenterFromCorners(const glm::vec3& c0, const glm::vec3& c1,
+	glm::vec3& outPosEq, glm::vec3& outSizeEq)
+{
+	const glm::vec3 lo = glm::min(c0, c1);
+	const glm::vec3 hi = glm::max(c0, c1);
+
+	outPosEq = to_eq_coord(glm::vec3{ (lo.x + hi.x) * 0.5f, hi.y, (lo.z + hi.z) * 0.5f });
+	outSizeEq = to_eq_coord(hi - lo);
+}
+
+// The ring a surface patch is built from is recoverable: BuildPatchRing lays down the two
+// ends in order, so each end is the midpoint of its own pair and the width is the span
+// between them. Anything not built that way is left alone rather than guessed at.
+static bool SurfaceEndsFromRing(const std::vector<glm::vec3>& verts,
+	glm::vec3& outStartEq, glm::vec3& outEndEq, float& outWidth)
+{
+	if (verts.size() != 4)
+		return false;
+
+	outStartEq = to_eq_coord((verts[0] + verts[1]) * 0.5f);
+	outEndEq = to_eq_coord((verts[2] + verts[3]) * 0.5f);
+	outWidth = glm::length(verts[1] - verts[0]);
+
+	return true;
+}
+
+// Editing an existing patch regenerates the collision mesh and rebuilds tiles, so a commit
+// per keystroke or per frame of a slider drag would be unusable. These report a change only
+// once the widget is finished with - Enter pressed, or focus moved away.
+static bool EditVec3(const char* label, glm::vec3& v)
+{
+	ImGui::InputFloat3(label, glm::value_ptr(v));
+	return ImGui::IsItemDeactivatedAfterEdit();
+}
+
+static bool EditWidth(float& width)
+{
+	ImGui::SliderFloat("Width", &width, 1.0f, 100.0f, "%.1f");
+	return ImGui::IsItemDeactivatedAfterEdit();
+}
+
+// Sets a vec3 field from the camera. Used by both the creator and the editors, since flying
+// to the spot beats reading coordinates off somewhere else and typing them in.
+static bool CameraButton(glm::vec3& outPosEq)
+{
+	ImGui::SameLine();
+
+	if (!ImGui::SmallButton("Camera"))
+		return false;
+
+	Editor* editor = Application::Get().GetEditor();
+	if (!editor)
+		return false;
+
+	outPosEq = to_eq_coord(editor->GetCamera().GetPosition());
+	return true;
+}
+
 MeshPatchTool::MeshPatchTool()
 {
 }
@@ -88,19 +162,12 @@ void MeshPatchTool::handleMenu()
 	// standing out of nothing, or a plug for a crack the floor falls through.
 	if (ImGui::CollapsingHeader("Block"))
 	{
-		ImGui::TextWrapped("A solid box, entered rather than clicked. Position is the corner"
-			" it grows from, in the same coordinates the tester tool uses.");
+		ImGui::TextWrapped("A solid box, entered rather than clicked. Position is the center"
+			" of the top face - the surface that gets walked on - in the same coordinates the"
+			" tester tool uses. The block hangs below it.");
 
 		ImGui::InputFloat3("Position", glm::value_ptr(m_state->m_blockPos));
-
-		// Flying to the spot is a far easier way to find a corner than reading coordinates
-		// off somewhere else and typing them in.
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Camera"))
-		{
-			if (Editor* editor = Application::Get().GetEditor())
-				m_state->m_blockPos = to_eq_coord(editor->GetCamera().GetPosition());
-		}
+		CameraButton(m_state->m_blockPos);
 
 		ImGui::InputFloat3("Size (L W H)", glm::value_ptr(m_state->m_blockSize));
 
@@ -121,6 +188,11 @@ void MeshPatchTool::handleMenu()
 
 	uint32_t deleteId = 0;
 
+	// Edits are applied after the loop: applying one regenerates the collision mesh and
+	// rebuilds tiles, which is not something to be doing while walking the patch list.
+	uint32_t editId = 0;
+	std::vector<glm::vec3> editVerts;
+
 	for (size_t i = 0; i < count; ++i)
 	{
 		MeshPatch* patch = navMesh->GetMeshPatch(i);
@@ -131,13 +203,72 @@ void MeshPatchTool::handleMenu()
 			? fmt::format("{} {}", patch->type == MeshPatchType::Box ? "Block" : "Patch", patch->id)
 			: patch->name;
 
-		ImGui::TextUnformatted(label.c_str());
+		bool open = ImGui::TreeNode(label.c_str());
+
 		ImGui::SameLine();
 
 		if (ImGui::SmallButton("Delete"))
 			deleteId = patch->id;
 
+		if (open)
+		{
+			if (patch->type == MeshPatchType::Box && patch->verts.size() >= 2)
+			{
+				glm::vec3 pos, size;
+				BlockTopCenterFromCorners(patch->verts[0], patch->verts[1], pos, size);
+
+				bool changed = EditVec3("Position", pos);
+				changed |= CameraButton(pos);
+				changed |= EditVec3("Size (L W H)", size);
+
+				if (changed && size.x != 0.0f && size.y != 0.0f && size.z != 0.0f)
+				{
+					glm::vec3 lo, hi;
+					BlockCornersFromTopCenter(pos, size, lo, hi);
+
+					editId = patch->id;
+					editVerts = { lo, hi };
+				}
+			}
+			else
+			{
+				glm::vec3 start, end;
+				float width;
+
+				if (SurfaceEndsFromRing(patch->verts, start, end, width))
+				{
+					bool changed = EditVec3("Start", start);
+					changed |= CameraButton(start);
+					changed |= EditVec3("End", end);
+					changed |= CameraButton(end);
+					changed |= EditWidth(width);
+
+					if (changed)
+					{
+						editId = patch->id;
+						editVerts = MeshPatchToolState::BuildPatchRing(
+							from_eq_coord(start), from_eq_coord(end), width);
+					}
+				}
+				else
+				{
+					ImGui::TextDisabled("%d vertices - not a two point patch, so not editable here.",
+						static_cast<int>(patch->verts.size()));
+				}
+			}
+
+			ImGui::TreePop();
+		}
+
 		ImGui::PopID();
+	}
+
+	if (editId != 0)
+	{
+		auto modifiedTiles = m_state->updatePatch(editId, editVerts);
+
+		if (!modifiedTiles.empty())
+			m_meshTool->RebuildTiles(modifiedTiles);
 	}
 
 	if (deleteId != 0)
@@ -220,11 +351,10 @@ std::vector<dtTileRef> MeshPatchToolState::addBlock()
 	if (m_blockSize.x == 0.0f || m_blockSize.y == 0.0f || m_blockSize.z == 0.0f)
 		return {};
 
-	const glm::vec3 corner = from_eq_coord(m_blockPos);
-	const glm::vec3 opposite = from_eq_coord(m_blockPos + m_blockSize);
+	glm::vec3 lo, hi;
+	BlockCornersFromTopCenter(m_blockPos, m_blockSize, lo, hi);
 
-	MeshPatch* patch = navMesh->AddMeshPatch({ corner, opposite }, std::string(),
-		MeshPatchType::Box);
+	MeshPatch* patch = navMesh->AddMeshPatch({ lo, hi }, std::string(), MeshPatchType::Box);
 
 	return commitPatch(patch);
 }
@@ -271,6 +401,36 @@ std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, 
 		BuildPatchRing(m_hitPos, p, m_width), std::string());
 
 	return commitPatch(patch);
+}
+
+std::vector<dtTileRef> MeshPatchToolState::updatePatch(uint32_t id, const std::vector<glm::vec3>& verts)
+{
+	auto navMesh = m_meshTool->GetNavMesh();
+	if (!navMesh)
+		return {};
+
+	MeshPatch* patch = navMesh->GetMeshPatchById(id);
+	if (!patch)
+		return {};
+
+	// Where it was, before it moves. Those tiles have the old geometry baked into them and
+	// have to be rebuilt too, or the patch leaves a copy of itself behind.
+	std::vector<dtTileRef> tiles = navMesh->GetTilesIntersectingMeshPatch(id);
+
+	patch->verts = verts;
+
+	for (dtTileRef tile : navMesh->GetTilesIntersectingMeshPatch(id))
+		tiles.push_back(tile);
+
+	std::sort(tiles.begin(), tiles.end());
+	tiles.erase(std::unique(tiles.begin(), tiles.end()), tiles.end());
+
+	// Unlike adding, this cannot be done incrementally: the old triangles are already in the
+	// collision mesh and there is no way to take them back out, so it is regenerated whole.
+	if (auto zoneProj = m_meshTool->GetZoneProj())
+		zoneProj->RebuildCollisionMesh();
+
+	return tiles;
 }
 
 void MeshPatchToolState::handleRender()
