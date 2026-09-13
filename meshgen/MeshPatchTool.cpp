@@ -208,9 +208,8 @@ void MeshPatchTool::handleMenu()
 	{
 		ImGui::SetTooltip("Lift each click to the highest surface over it.\n\n"
 			"A click lands on whichever face the ray met first, which on a block\n"
-			"is often the underside or a vertical side rather than the top. Off\n"
-			"by default, since a patch laid under something is a valid thing to\n"
-			"want.");
+			"is often the underside or a vertical side rather than the top. Turn\n"
+			"it off to lay a patch under something on purpose.");
 	}
 
 	if (m_state->m_snapToTop)

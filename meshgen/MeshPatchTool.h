@@ -99,9 +99,10 @@ private:
 
 	// Clicking a block tends to land on whichever face the ray met first, which is often the
 	// underside or a vertical side rather than the surface being aimed at. With this on, a
-	// click is lifted to the topmost surface over it. Off by default and bounded by a search
-	// height, since a patch deliberately laid under something is a legitimate thing to want.
-	bool m_snapToTop = false;
+	// click is lifted to the topmost surface over it. Bounded by a search height rather than
+	// unconditional, and switchable off, since a patch laid under something is a legitimate
+	// thing to want.
+	bool m_snapToTop = true;
 	float m_snapSearchHeight = 15.0f;
 
 	bool m_defaultsInitialized = false;
