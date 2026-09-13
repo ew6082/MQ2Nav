@@ -101,7 +101,21 @@ bool MGHierarchicalModel::BuildGPUBuffers()
 			// displaces every vertex by roughly its bone's negated pivot. OBJ_RUBBLEFLOATA
 			// carries twenty attachment-point bones spread over about 400 units, and came out
 			// smeared across 1101 units against a true extent of 538.
-			glm::mat4x4 skinTransform = glm::identity<glm::mat4x4>();
+			// What remains is the coordinate change. InitSkinFromEQMData stores skin vertices
+			// as raw file positions, unlike SimpleModelDefinition which stores them .yzx
+			// swizzled, and the bone matrices were carrying that permutation - their pivots
+			// are swizzled and their quaternions conjugated. So the bind pose transform is
+			// the permutation itself, which maps (x, y, z) to (y, z, x). Applying it as a
+			// matrix swizzles the normals along with the positions. The pre-eqglib loader
+			// likewise kept raw positions and swizzled them on the way out.
+			static const glm::mat4x4 kFileToWorld{
+				glm::vec4(0.0f, 0.0f, 1.0f, 0.0f),
+				glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
+				glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
+				glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)
+			};
+
+			glm::mat4x4 skinTransform = kFileToWorld;
 			glm::mat3 normalTransform = glm::mat3(skinTransform);
 
 			for (size_t i = 0; i < info.verts.size(); ++i)
