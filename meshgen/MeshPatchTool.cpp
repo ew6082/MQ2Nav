@@ -6,6 +6,8 @@
 
 #include "common/MathUtil.h"
 #include "common/NavMeshData.h"
+#include "meshgen/Application.h"
+#include "meshgen/Editor.h"
 #include "meshgen/NavMeshTool.h"
 #include "meshgen/ZoneProject.h"
 #include "meshgen/ZoneRenderManager.h"
@@ -90,6 +92,16 @@ void MeshPatchTool::handleMenu()
 			" it grows from, in the same coordinates the tester tool uses.");
 
 		ImGui::InputFloat3("Position", glm::value_ptr(m_state->m_blockPos));
+
+		// Flying to the spot is a far easier way to find a corner than reading coordinates
+		// off somewhere else and typing them in.
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Camera"))
+		{
+			if (Editor* editor = Application::Get().GetEditor())
+				m_state->m_blockPos = to_eq_coord(editor->GetCamera().GetPosition());
+		}
+
 		ImGui::InputFloat3("Size (L W H)", glm::value_ptr(m_state->m_blockSize));
 
 		if (ImGui::Button("Create Block"))
