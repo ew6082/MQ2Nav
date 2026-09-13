@@ -483,12 +483,68 @@ bool ZoneProject::BuildCollisionMesh()
 // surface to work from rather than having its output corrected afterwards.
 // Triangulated as a fan, so the ring has to be convex to come out right. The tool only
 // produces quads; a ring built by hand is the user's responsibility.
+//
+// Winding decides whether a triangle is walkable: rcMarkWalkableTriangles takes the face
+// normal and rejects anything not pointing up. A patch is authored by clicking, so the ring
+// comes out either way round depending on which side was clicked first - hence the flip
+// rather than trusting the caller.
+static void AddUpwardTriangle(ZoneCollisionMesh& collisionMesh,
+	const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+{
+	if (glm::cross(b - a, c - a).y < 0.0f)
+		collisionMesh.addTriangle(a, c, b);
+	else
+		collisionMesh.addTriangle(a, b, c);
+}
+
+// Box patches are solid: the top face is what gets walked on, and the sides and bottom are
+// there so the box reads as an obstacle from every other direction rather than a surface
+// that can be passed through from below.
+static void AddBoxTriangles(ZoneCollisionMesh& collisionMesh, const glm::vec3& c0, const glm::vec3& c1)
+{
+	const glm::vec3 lo = glm::min(c0, c1);
+	const glm::vec3 hi = glm::max(c0, c1);
+
+	const glm::vec3 v[8] = {
+		{ lo.x, lo.y, lo.z }, { hi.x, lo.y, lo.z }, { hi.x, lo.y, hi.z }, { lo.x, lo.y, hi.z },
+		{ lo.x, hi.y, lo.z }, { hi.x, hi.y, lo.z }, { hi.x, hi.y, hi.z }, { lo.x, hi.y, hi.z },
+	};
+
+	// Each face as two triangles, wound outwards. Only the top face matters for walkability,
+	// but the others still have to be rasterized or the box would be hollow to the voxelizer.
+	static const int faces[12][3] = {
+		{ 4, 5, 6 }, { 4, 6, 7 },   // top      (+y)
+		{ 0, 2, 1 }, { 0, 3, 2 },   // bottom   (-y)
+		{ 0, 1, 5 }, { 0, 5, 4 },   // -z
+		{ 3, 7, 6 }, { 3, 6, 2 },   // +z
+		{ 0, 4, 7 }, { 0, 7, 3 },   // -x
+		{ 1, 2, 6 }, { 1, 6, 5 },   // +x
+	};
+
+	for (const auto& f : faces)
+		collisionMesh.addTriangle(v[f[0]], v[f[1]], v[f[2]]);
+}
+
 static void AddPatchTriangles(ZoneCollisionMesh& collisionMesh, const MeshPatch& patch)
 {
+	if (patch.type == MeshPatchType::Box)
+	{
+		if (patch.verts.size() >= 2)
+			AddBoxTriangles(collisionMesh, patch.verts[0], patch.verts[1]);
+
+		return;
+	}
+
 	for (size_t i = 1; i + 1 < patch.verts.size(); ++i)
 	{
-		collisionMesh.addTriangle(patch.verts[0], patch.verts[i], patch.verts[i + 1]);
+		AddUpwardTriangle(collisionMesh, patch.verts[0], patch.verts[i], patch.verts[i + 1]);
 	}
+}
+
+// A surface needs a ring; a box needs only its two corners.
+static bool IsPatchUsable(const MeshPatch& patch)
+{
+	return patch.verts.size() >= (patch.type == MeshPatchType::Box ? 2u : 3u);
 }
 
 void ZoneProject::AddMeshPatchesToCollisionMesh()
@@ -499,7 +555,7 @@ void ZoneProject::AddMeshPatchesToCollisionMesh()
 
 	for (const auto& patch : navMesh->GetMeshPatches())
 	{
-		if (patch->verts.size() >= 3)
+		if (IsPatchUsable(*patch))
 			AddPatchTriangles(*m_collisionMesh, *patch);
 	}
 }
@@ -510,7 +566,7 @@ void ZoneProject::AddMeshPatchesToCollisionMesh()
 // collision mesh for one patch takes seconds on a large zone.
 bool ZoneProject::AddMeshPatchGeometry(const MeshPatch& patch)
 {
-	if (!m_collisionMesh || patch.verts.size() < 3)
+	if (!m_collisionMesh || !IsPatchUsable(patch))
 		return false;
 
 	AddPatchTriangles(*m_collisionMesh, patch);

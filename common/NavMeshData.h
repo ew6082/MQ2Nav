@@ -159,14 +159,21 @@ enum struct MeshPatchType : uint8_t
 	// A plain surface fed to the collision mesh. Slope and erosion apply to it as they do
 	// to any other geometry. Zero, so a patch written before the type existed reads as one.
 	Surface = 0,
+
+	// A solid box, held as exactly two opposite corners rather than a ring. Useful where a
+	// surface alone would not do: standing a landing up out of nothing, or filling a crack
+	// that the floor geometry falls through.
+	Box = 1,
 };
 
 struct MeshPatch
 {
 	uint32_t id = 0;
 
-	// Ordered ring of at least three vertices, triangulated as a fan. A flat rectangle and
-	// a sloped strip bridging two ledges are both just rings.
+	// For Surface, an ordered ring of at least three vertices, triangulated as a fan; a flat
+	// rectangle and a sloped strip bridging two ledges are both just rings. For Box, exactly
+	// two opposite corners. Either way the bounding box of this is what decides which tiles
+	// the patch touches.
 	std::vector<glm::vec3> verts;
 
 	MeshPatchType type = MeshPatchType::Surface;

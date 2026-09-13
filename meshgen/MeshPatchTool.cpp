@@ -4,6 +4,7 @@
 
 #include "MeshPatchTool.h"
 
+#include "common/MathUtil.h"
 #include "common/NavMeshData.h"
 #include "meshgen/NavMeshTool.h"
 #include "meshgen/ZoneProject.h"
@@ -50,6 +51,8 @@ void MeshPatchTool::handleMenu()
 
 	const float agentRadius = navMesh->GetNavMeshConfig().agentRadius;
 
+	m_state->initWidthFromConfig();
+
 	ImGui::TextWrapped("Click a point on each side of the gap to lay a patch of geometry"
 		" between them. The navmesh is rebuilt from it, so the two sides join properly"
 		" instead of being bridged after the fact.");
@@ -79,6 +82,27 @@ void MeshPatchTool::handleMenu()
 
 	ImGui::Separator();
 
+	// Block creator. Two clicks cannot describe a solid, and some repairs need one: a landing
+	// standing out of nothing, or a plug for a crack the floor falls through.
+	if (ImGui::CollapsingHeader("Block"))
+	{
+		ImGui::TextWrapped("A solid box, entered rather than clicked. Position is the corner"
+			" it grows from, in the same coordinates the tester tool uses.");
+
+		ImGui::InputFloat3("Position", glm::value_ptr(m_state->m_blockPos));
+		ImGui::InputFloat3("Size (L W H)", glm::value_ptr(m_state->m_blockSize));
+
+		if (ImGui::Button("Create Block"))
+		{
+			std::vector<dtTileRef> modifiedTiles = m_state->addBlock();
+
+			if (!modifiedTiles.empty())
+				m_meshTool->RebuildTiles(modifiedTiles);
+		}
+	}
+
+	ImGui::Separator();
+
 	// Existing patches
 	size_t count = navMesh->GetMeshPatchCount();
 	ImGui::Text("%d patch%s", static_cast<int>(count), count == 1 ? "" : "es");
@@ -92,7 +116,7 @@ void MeshPatchTool::handleMenu()
 		ImGui::PushID(static_cast<int>(patch->id));
 
 		std::string label = patch->name.empty()
-			? fmt::format("Patch {}", patch->id)
+			? fmt::format("{} {}", patch->type == MeshPatchType::Box ? "Block" : "Patch", patch->id)
 			: patch->name;
 
 		ImGui::TextUnformatted(label.c_str());
@@ -142,6 +166,55 @@ void MeshPatchToolState::reset()
 {
 	m_hitPosSet = false;
 	m_currentPatchId = 0;
+	m_widthInitialized = false;
+}
+
+void MeshPatchToolState::initWidthFromConfig()
+{
+	if (m_widthInitialized)
+		return;
+
+	auto navMesh = m_meshTool->GetNavMesh();
+	if (!navMesh)
+		return;
+
+	// The narrowest strip that survives erosion, plus a little slack. Patches are mostly used
+	// to define a path through somewhere the generator gave up on, not to floor an area, so
+	// starting wide just means overwriting geometry that did not need it.
+	m_width = navMesh->GetNavMeshConfig().agentRadius * 2.0f + 2.0f;
+	m_widthInitialized = true;
+}
+
+// Puts a newly added patch's geometry into the collision mesh and reports the tiles that need
+// rebuilding. Recording the patch is not enough on its own: tiles are rebuilt from the
+// collision mesh, so the geometry has to be in there first or nothing changes.
+std::vector<dtTileRef> MeshPatchToolState::commitPatch(MeshPatch* patch)
+{
+	m_currentPatchId = patch->id;
+
+	if (auto zoneProj = m_meshTool->GetZoneProj())
+		zoneProj->AddMeshPatchGeometry(*patch);
+
+	return m_meshTool->GetNavMesh()->GetTilesIntersectingMeshPatch(patch->id);
+}
+
+std::vector<dtTileRef> MeshPatchToolState::addBlock()
+{
+	auto navMesh = m_meshTool->GetNavMesh();
+	if (!navMesh)
+		return {};
+
+	// A zero extent in any axis gives a box with no volume, which rasterizes to nothing.
+	if (m_blockSize.x == 0.0f || m_blockSize.y == 0.0f || m_blockSize.z == 0.0f)
+		return {};
+
+	const glm::vec3 corner = from_eq_coord(m_blockPos);
+	const glm::vec3 opposite = from_eq_coord(m_blockPos + m_blockSize);
+
+	MeshPatch* patch = navMesh->AddMeshPatch({ corner, opposite }, std::string(),
+		MeshPatchType::Box);
+
+	return commitPatch(patch);
 }
 
 std::vector<glm::vec3> MeshPatchToolState::BuildPatchRing(
@@ -185,14 +258,7 @@ std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, 
 	MeshPatch* patch = navMesh->AddMeshPatch(
 		BuildPatchRing(m_hitPos, p, m_width), std::string());
 
-	m_currentPatchId = patch->id;
-
-	// Recording the patch is not enough: tiles are rebuilt from the collision mesh, so the
-	// geometry has to be in there before the rebuild or nothing changes.
-	if (auto zoneProj = m_meshTool->GetZoneProj())
-		zoneProj->AddMeshPatchGeometry(*patch);
-
-	return navMesh->GetTilesIntersectingMeshPatch(patch->id);
+	return commitPatch(patch);
 }
 
 void MeshPatchToolState::handleRender()
@@ -221,6 +287,19 @@ void MeshPatchToolState::handleRender()
 	{
 		const MeshPatch* patch = navMesh->GetMeshPatch(i);
 		const size_t n = patch->verts.size();
+
+		if (patch->type == MeshPatchType::Box)
+		{
+			if (n < 2)
+				continue;
+
+			// Two corners, so the ring walk below does not apply - draw the twelve edges.
+			const glm::vec3 lo = glm::min(patch->verts[0], patch->verts[1]);
+			const glm::vec3 hi = glm::max(patch->verts[0], patch->verts[1]);
+
+			duAppendBoxWire(&dd, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, color);
+			continue;
+		}
 
 		for (size_t j = 0; j < n; ++j)
 		{

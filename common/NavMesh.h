@@ -213,7 +213,8 @@ public:
 	const std::vector<std::unique_ptr<MeshPatch>>& GetMeshPatches() const { return m_patches; }
 
 	MeshPatch* AddMeshPatch(std::unique_ptr<MeshPatch> patch);
-	MeshPatch* AddMeshPatch(const std::vector<glm::vec3>& verts, const std::string& name);
+	MeshPatch* AddMeshPatch(const std::vector<glm::vec3>& verts, const std::string& name,
+		MeshPatchType type = MeshPatchType::Surface);
 
 	MeshPatch* GetMeshPatchById(uint32_t id);
 	void DeleteMeshPatchById(uint32_t id);

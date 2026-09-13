@@ -940,11 +940,13 @@ MeshPatch* NavMesh::AddMeshPatch(std::unique_ptr<MeshPatch> patch)
 	return result;
 }
 
-MeshPatch* NavMesh::AddMeshPatch(const std::vector<glm::vec3>& verts, const std::string& name)
+MeshPatch* NavMesh::AddMeshPatch(const std::vector<glm::vec3>& verts, const std::string& name,
+	MeshPatchType type)
 {
 	auto patch = std::make_unique<MeshPatch>();
 	patch->verts = verts;
 	patch->name = name;
+	patch->type = type;
 
 	return AddMeshPatch(std::move(patch));
 }
@@ -959,10 +961,21 @@ void NavMesh::DeleteMeshPatchById(uint32_t id)
 {
 	auto iter = std::find_if(m_patches.begin(), m_patches.end(),
 		[id](const auto& ptr) { return ptr->id == id; });
-	if (iter != m_patches.end())
+	if (iter == m_patches.end())
+		return;
+
+	m_patches.erase(iter);
+
+	// Renumber what is left, so the list reads 1..n instead of climbing forever as patches
+	// are tried and thrown away. Nothing else refers to a patch by id - unlike connections,
+	// they exist only until the tiles are built from them - so this is safe to do.
+	m_patchesById.clear();
+	m_nextPatchId = 1;
+
+	for (auto& patch : m_patches)
 	{
-		m_patchesById.erase((*iter)->id);
-		m_patches.erase(iter);
+		patch->id = m_nextPatchId++;
+		m_patchesById.emplace(patch->id, patch.get());
 	}
 }
 
