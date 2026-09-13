@@ -144,6 +144,37 @@ bool MGSimpleModel::BuildGPUBuffers()
 		vertices.push_back(v);
 	}
 
+	// Geometry that is not finite, or far larger than any zone, draws as huge shapes
+	// sprawling past the edge of the world. Name the model rather than leaving it to be
+	// found by flying around.
+	{
+		glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+		bool finite = true;
+
+		for (const StaticMeshVertex& v : vertices)
+		{
+			if (!std::isfinite(v.position.x) || !std::isfinite(v.position.y) || !std::isfinite(v.position.z))
+			{
+				finite = false;
+				break;
+			}
+
+			lo = glm::min(lo, v.position);
+			hi = glm::max(hi, v.position);
+		}
+
+		if (!finite)
+		{
+			SPDLOG_ERROR("MGSimpleModel::BuildGPUBuffers: '{}' has non-finite vertices", def->m_tag);
+		}
+		else if (glm::length(hi - lo) > 6000.0f)
+		{
+			SPDLOG_WARN("MGSimpleModel::BuildGPUBuffers: '{}' spans {:.0f} units "
+				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f}) - larger than a zone",
+				def->m_tag, glm::length(hi - lo), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+		}
+	}
+
 	// Group faces by material index for batched rendering
 	std::map<int16_t, std::vector<uint32_t>> facesByMaterial;
 	for (const auto& face : def->m_faces)

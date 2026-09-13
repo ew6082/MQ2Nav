@@ -243,6 +243,37 @@ bool MGHierarchicalModel::BuildGPUBuffers()
 		return false;
 	}
 
+	// Skinning multiplies vertices through the bone matrices, so a bad bone transform shows
+	// up here as geometry that is not finite or is far larger than any zone. Name it.
+	{
+		glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+		bool finite = true;
+
+		for (const StaticMeshVertex& v : allVertices)
+		{
+			if (!std::isfinite(v.position.x) || !std::isfinite(v.position.y) || !std::isfinite(v.position.z))
+			{
+				finite = false;
+				break;
+			}
+
+			lo = glm::min(lo, v.position);
+			hi = glm::max(hi, v.position);
+		}
+
+		if (!finite)
+		{
+			SPDLOG_ERROR("MGHierarchicalModel::BuildGPUBuffers: '{}' has non-finite vertices after skinning",
+				definition->m_tag);
+		}
+		else if (glm::length(hi - lo) > 6000.0f)
+		{
+			SPDLOG_WARN("MGHierarchicalModel::BuildGPUBuffers: '{}' spans {:.0f} units after skinning "
+				"({:.0f} {:.0f} {:.0f} .. {:.0f} {:.0f} {:.0f}) - larger than a zone",
+				definition->m_tag, glm::length(hi - lo), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+		}
+	}
+
 	// Create bgfx buffers
 	m_vertexBuffer = bgfx::createVertexBuffer(
 		bgfx::copy(allVertices.data(), static_cast<uint32_t>(allVertices.size() * sizeof(StaticMeshVertex))),
