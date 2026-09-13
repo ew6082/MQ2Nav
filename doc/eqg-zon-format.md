@@ -1,13 +1,19 @@
-EQG `.zon` Zone Format (EQGZ v2)
+EQG Zone and Model Formats
 ======
 
-Notes on the layout of EQG version-2 zone files, and on how MQ2Nav's loaders
-currently handle them. Everything below was derived by decoding the shipped
-client data and checking the result against every zone file in a Live
-installation, rather than from documentation.
+Notes on the layout of EQG version-2 zone files and the models they place, and on
+how MQ2Nav's loaders handle them. Derived by decoding the shipped client data
+rather than from documentation.
 
-This covers **EQGZ** only. The v4 format (magic `EQTZP`) is a different file
-and is handled separately by `eqg_v4_loader.cpp`.
+The `.zon` layout below was checked against every zone file in a Live
+installation. The sections after it - terrain placement, instance rotations, and
+the hierarchical models - were worked out against ruinedrelic and candlemakers
+specifically, with a known-good navmesh as the reference; treat their counts as
+measurements of those two zones rather than of the whole set.
+
+This covers **EQGZ** only. The v4 format (magic `EQTZP`) is a different file,
+parsed by `EQGLoader::ParseTerrainProject` into the `TerrainSystem` in
+`eqg_terrain_loader.cpp`.
 
 
 File layout
@@ -54,10 +60,14 @@ asserting.
 The string table is `list_length` bytes of NUL-separated names. The model list
 that follows is `model_count` uint32 offsets into it, naming the `.MOD` and
 `.TER` files this zone uses. Each name resolves to a member of the companion
-`.eqg` by a case-insensitive exact match.
+`.eqg`, which is keyed by a CRC of the lower-cased filename, so lookup is
+effectively case-insensitive.
 
-Names carry their role as a prefix: `TER_<zone>.TER` for terrain,
-`OBJ_<name>.MOD` for placed objects.
+Names carry their role as a prefix: `TER_<zone>.TER` for terrain, and both
+`OBJ_<name>.MOD` and `OBP_<name>.MOD` for placed objects. The two object
+prefixes are not interchangeable in practice - `OBP_` is used for the small
+props and decorations, which are typically non-collidable, and those are the
+bulk of what `BuildCollisionMesh` legitimately skips.
 
 ### Placeables
 
@@ -89,9 +99,9 @@ be indexed, the placeable array has to be walked sequentially.
 
 ### Regions and lights
 
-Both are fixed size and parse as described by `zon_region` (40 bytes) and
-`zon_light` (32 bytes) in `eqg_structs.h`. Region `extend_*` values are
-half-extents about the region centre.
+Both are fixed size: 40 bytes per region and 32 per light. `eqglib` calls them
+`SZONArea` and `SZONLight` - see the mapping table below - and region `extend_*`
+values are half-extents about the region centre.
 
 
 How this was verified
@@ -108,11 +118,20 @@ lights then decoding into sensibly named data. Across those zones:
 
 The 2x multiple on `color_count` shows up on `roost` and `xorbb` among others.
 
+Checked again independently since: walking the whole file as header, string pool,
+model list, `36 + 4 + color_count * 4` per instance, then `num_areas * 40` and
+`num_lights * 32`, lands on the final byte with **zero** left over in both
+ruinedrelic and candlemakers. That is worth knowing because it rules out a spare
+field: there is nowhere in the 36-byte instance record, or the 28-byte header,
+for a flag that might select between rotation conventions or mark an instance as
+animated. Whatever distinguishes those instances is in the model, not the `.zon`.
+
 Mapping onto `eqglib`
 ---------------------
 
-`eqglib/eqg_structs.h` names the same records differently, and the fields below
-line up one for one with the layout above:
+The `zon_*` names used above are this document's, from the original decoding
+work; they do not appear in the source. `eqglib/eqg_structs.h` calls the same
+records something else, and the fields line up one for one:
 
 | Above          | `eqglib`       | Notes                                     |
 | -------------- | -------------- | ----------------------------------------- |
@@ -231,3 +250,81 @@ stores a `glm::quat` and exposes `SetRotation(quat)`; it is `eqg::Actor` that
 holds its orientation as Euler angles and would need to carry a quaternion
 instead. Until that is done the multi-axis case stays wrong, and it is wrong in
 upstream too.
+
+
+Animated instances: `.ani` files and hierarchical models
+--------------------------------------------------------
+
+Nothing in the `.zon` marks an instance as animated. The distinction lives in the
+model: a `.mod` whose `SEQMHeader.num_bones` is non-zero is loaded as a
+*hierarchical* model rather than a simple one, and a companion
+`<model>_default.ani` in the same archive carries its motion. ruinedrelic has
+five - `obj_rubblefloata/b/c` and `obj_magicbridgea/b` - and candlemakers has
+none, which is why only the former showed the problems below.
+
+In game these are the pieces of rubble that drift and tumble within an invisible
+volume and rebound off it. `eqglib` does not read any of that: `EQGLoader::ParseFile`
+matches `.ani` and returns success without parsing a byte, so the animation is
+neither loaded nor applied and the models are only ever drawn in their bind pose.
+For a navmesh tool that is reasonable as far as it goes - but note the geometry
+does move in game, so a navmesh built over it describes a surface that will not
+always be there. That may still be wanted; off-mesh connections can be anchored
+to the polygons it produces.
+
+### The EQGM layout, including bones
+
+`SEQMHeader` is **28 bytes**, not 24 - it carries `num_bones` after `num_faces`.
+Sections follow in this order:
+
+```
+SEQMHeader                28 bytes
+string pool               string_pool_size bytes
+materials                 num_materials x (16 + num_params * 12)
+vertices                  num_vertices x 44   (32 when version <= 2)
+faces                     num_faces x 20
+bones                     num_bones x 56      (SEQMBoneData)
+skin data                 num_vertices x variable (weight count, then weights)
+```
+
+Because the skin block is variable length, the vertex offset cannot be derived by
+subtracting the fixed-size tail from the file size - that only works for models
+with no bones, and silently produces garbage for the rest. Walk the material
+block instead, and check that every face index is below `num_vertices`.
+
+The bones of these models are mostly not deformation bones.
+`obj_rubblefloata.mod` has 21: `ROOT_BONE` and `Point001`..`Point020`, every one
+with an identity quaternion and unit scale, differing only in pivot. They are
+attachment locators spread across the rock, roughly 402 x 374 units for a mesh
+whose own extent is 400 x 354 x 59.
+
+### Four things that were wrong with the hierarchical path
+
+All four are fixed here, unlike the rotation problem above, which is not. Worth
+recording together, because they compounded and each one masked the next - the
+600x scale error hid the rest until it was out of the way:
+
+* `ResourceManager::CreateHierarchicalActor` forwarded `boundingRadius` and
+  `scale` to the constructor in the wrong order, so every hierarchical actor used
+  its bounding radius as its scale factor - about 269 in place of 0.446 for the
+  rubble, some 600x too large. `CreateSimpleActor` has it right.
+* `UpdateDefaultPoseBoneMatrices` accumulates from `GetDefaultPoseMatrix()`, but
+  the EQG bone constructor initialises that to `inverse(m_mtx)` rather than the
+  local matrix, and composes child * parent rather than parent * child. What it
+  produces is not a world pose, and skinning by it displaces each vertex by
+  roughly its bone's negated pivot - smearing the rubble across the 400-unit
+  spread of its attachment points, 538 units of mesh reported as 1101.
+* `InitSkinFromEQMData` stores raw file positions, unlike `SimpleModelDefinition`
+  which stores them `.yzx` swizzled. The bone matrices had been carrying that
+  permutation, so removing the skinning transform dropped the coordinate change
+  with it and stood the slabs on edge.
+* `SetCollisionMesh` is only ever called from the WLD loader, so an EQG
+  hierarchical model had no collision data, `m_hasCollision` stayed false,
+  `HierarchicalActor::IsCollidable` returned false, no `CollisionComponent` was
+  attached, and `BuildCollisionMesh` never saw it. The models were missing from
+  the collision mesh entirely, with nothing logged.
+
+Since MeshGenerator never poses these models, the bind pose is the only pose, and
+the skinning transform reduces to the file-to-world permutation. The pre-eqglib
+loader had no hierarchical path at all - it drew each `.mod` as plain geometry at
+the instance transform - which is why it placed them correctly all along, and why
+it is the right reference when this code misbehaves.
