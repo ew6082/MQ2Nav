@@ -87,11 +87,21 @@ bool MGHierarchicalModel::BuildGPUBuffers()
 			if (info.verts.empty())
 				continue;
 
-			// The skinning transform: defaultPoseMtx * offsetMatrix
-			// defaultPoseMtx: accumulated world-space default pose for this bone
-			// offsetMatrix: inverse bind-pose (transforms from model space to bone-local space)
-			const glm::mat4x4& defaultPoseMtx = definition->GetBoneDefinition(boneIdx)->GetDefaultPoseMatrix();
-			glm::mat4x4 skinTransform = defaultPoseMtx * info.offsetMatrix;
+			// Skinning is worldPose * inverseBind, which is identity while a model is in its
+			// bind pose. MeshGenerator never loads the .ani animation files, so these models
+			// are always in their bind pose and the transform is identity by definition -
+			// which is why the pre-eqglib loader, drawing the mesh untransformed, placed them
+			// correctly.
+			//
+			// It cannot be computed from GetDefaultPoseMatrix() as it stands:
+			// HierarchicalModelDefinition::UpdateDefaultPoseBoneMatrices accumulates starting
+			// from that matrix, but the EQG bone constructor initialises it to
+			// inverse(m_mtx) rather than the local matrix, and composes child * parent rather
+			// than parent * child. The result is not a world pose, and skinning by it
+			// displaces every vertex by roughly its bone's negated pivot. OBJ_RUBBLEFLOATA
+			// carries twenty attachment-point bones spread over about 400 units, and came out
+			// smeared across 1101 units against a true extent of 538.
+			glm::mat4x4 skinTransform = glm::identity<glm::mat4x4>();
 			glm::mat3 normalTransform = glm::mat3(skinTransform);
 
 			for (size_t i = 0; i < info.verts.size(); ++i)
