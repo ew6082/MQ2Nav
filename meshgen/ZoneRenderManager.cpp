@@ -560,7 +560,10 @@ void ZoneRenderManager::Render()
 
 		m_navMeshRender->Render();
 
-		m_areaVolumeSystem->Render();
+		if (!m_hideAreaVolumesWhenTextured || m_geometryRenderMode == GeometryRenderMode::Collision)
+		{
+			m_areaVolumeSystem->Render();
+		}
 	}
 
 	RenderDebugDraw();

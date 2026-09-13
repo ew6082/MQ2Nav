@@ -59,6 +59,22 @@ void ViewPanel::OnImGuiRender(bool* p_open)
 		if (ImGui::Checkbox("Area Volumes", &drawAreaVolumes))
 			renderManager->SetDrawAreaVolumes(drawAreaVolumes);
 
+		ImGui::Indent();
+		ImGui::BeginDisabled(!drawAreaVolumes);
+
+		bool hideWhenTextured = renderManager->GetHideAreaVolumesWhenTextured();
+		if (ImGui::Checkbox("Hide in textured view", &hideWhenTextured))
+			renderManager->SetHideAreaVolumesWhenTextured(hideWhenTextured);
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("Keep the zone's water and lava volumes out of the textured view,"
+				" while still drawing them over the collision view");
+		}
+
+		ImGui::EndDisabled();
+		ImGui::Unindent();
+
 		bool drawGrid = renderManager->GetDrawGrid();
 		if (ImGui::Checkbox("Draw Grid", &drawGrid))
 			renderManager->SetDrawGrid(drawGrid);
