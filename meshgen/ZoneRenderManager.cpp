@@ -454,6 +454,31 @@ void ZoneRenderManager::RenderEntities()
 	if (!GetDrawAreaVolumes())
 		return;
 
+	// Sorts an area into the kinds the view options offer. A teleport is checked first
+	// because it is carried as a flag and can sit on top of any environment type.
+	auto shouldDrawArea = [this](const eqg::AreaEnvironment& env)
+	{
+		using Env = eqg::AreaEnvironment;
+
+		if ((env.flags & (Env::Teleport | Env::TeleportIndex)) != Env::Flags_None)
+			return m_drawAreaTeleport;
+
+		switch (env.type)
+		{
+		case Env::UnderWater:
+		case Env::UnderWater2:
+		case Env::UnderWater3:
+		case Env::UnderIceWater:
+			return m_drawAreaWater;
+
+		case Env::UnderLava:
+			return m_drawAreaLava;
+
+		default:
+			return m_drawAreaOther;
+		}
+	};
+
 	const auto& scene = m_project->GetScene();
 	auto& registry = scene->GetRegistry();
 
@@ -461,6 +486,9 @@ void ZoneRenderManager::RenderEntities()
 	for (auto [entity, transform, area] : view.each())
 	{
 		if (registry.any_of<HiddenComponent>(entity))
+			continue;
+
+		if (area.area && !shouldDrawArea(area.area->environment))
 			continue;
 
 		// Get world space transform matrix
