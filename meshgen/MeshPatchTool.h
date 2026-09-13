@@ -58,9 +58,9 @@ public:
 	// Writes the buffer back to the patch being edited.
 	std::vector<dtTileRef> saveEdit();
 
-	// The default width only makes sense once the agent radius is known, and there is no
-	// navmesh yet when the tool is constructed.
-	void initWidthFromConfig();
+	// The default width and end extension only make sense once the agent radius and cell size
+	// are known, and there is no navmesh yet when the tool is constructed.
+	void initDefaultsFromConfig();
 
 	// Builds the quad for a patch spanning from one point to another. Kept separate so the
 	// width can be changed after the fact without re-clicking.
@@ -80,7 +80,14 @@ private:
 	// the default is the narrowest useful value plus a little, since the tool is mostly used
 	// to define a narrow path rather than to floor an area. Set from the config on first use.
 	float m_width = 12.0f;
-	bool m_widthInitialized = false;
+
+	// How far a steep patch overshoots each of its clicked points. Recast strips walkable
+	// surface back from every drop-off, so a patch that stops exactly at the ledge it climbs
+	// to ends inside that dead band and comes out disconnected. Flat patches meet coplanar
+	// ground with no drop-off and are left alone. Set from the config on first use.
+	float m_endExtension = 6.0f;
+
+	bool m_defaultsInitialized = false;
 
 	// Block creator, in EQ coordinates to match what the tester tool shows and what the user
 	// reads off in game. The position is the corner, not the center.
@@ -98,6 +105,7 @@ private:
 	glm::vec3 m_editPos{};   // block: center of the top face. surface: start point
 	glm::vec3 m_editSize{};  // block: L W H.                  surface: end point
 	float m_editWidth = 0.0f;
+	std::string m_editName;
 
 	uint32_t m_currentPatchId = 0;
 };

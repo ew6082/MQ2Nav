@@ -45,6 +45,43 @@ static void BlockTopCenterFromCorners(const glm::vec3& c0, const glm::vec3& c1,
 	outSizeEq = to_eq_coord(hi - lo);
 }
 
+// Recast strips walkable surface back from every drop-off, twice over: rcFilterLedgeSpans
+// nulls about a cell around the rim of anything raised, and rcErodeWalkableArea then takes
+// walkableRadius more. At the default cell size and agent radius that is roughly three units
+// in from every edge. A steep patch that stops exactly at the ledge it is climbing to
+// therefore ends inside that dead band, and comes out as an island with nothing joining it.
+//
+// Overshooting both ends puts the patch surface well past the band, so the two rasterize
+// into one continuous surface. Each end keeps its own height and only moves horizontally, so
+// the quad stays planar and the ring stays four vertices.
+//
+// Flat patches meet coplanar ground with no drop-off and no dead band, so they are left
+// alone rather than made to overshoot into geometry that did not need it.
+static constexpr float kSteepPatchSlopeDegrees = 15.0f;
+
+static void ExtendSteepEnds(glm::vec3& from, glm::vec3& to, float extension)
+{
+	if (extension <= 0.0f)
+		return;
+
+	const glm::vec3 flat{ to.x - from.x, 0.0f, to.z - from.z };
+	const float run = glm::length(flat);
+
+	// Purely vertical, so there is no direction of travel to overshoot along.
+	if (run < 1e-4f)
+		return;
+
+	const float rise = std::abs(to.y - from.y);
+
+	if (glm::degrees(std::atan2(rise, run)) < kSteepPatchSlopeDegrees)
+		return;
+
+	const glm::vec3 dir = flat / run;
+
+	from -= dir * extension;
+	to += dir * extension;
+}
+
 // The ring a surface patch is built from is recoverable: BuildPatchRing lays down the two
 // ends in order, so each end is the midpoint of its own pair and the width is the span
 // between them. Anything not built that way is left alone rather than guessed at.
@@ -133,7 +170,7 @@ void MeshPatchTool::handleMenu()
 
 	const float agentRadius = navMesh->GetNavMeshConfig().agentRadius;
 
-	m_state->initWidthFromConfig();
+	m_state->initDefaultsFromConfig();
 
 	ImGui::TextWrapped("Click a point on each side of the gap to lay a patch of geometry"
 		" between them. The navmesh is rebuilt from it, so the two sides join properly"
@@ -152,6 +189,18 @@ void MeshPatchTool::handleMenu()
 		ImGui::TextColored(ImColor(255, 128, 0),
 			"Too narrow: erosion takes %.1f off each side, so nothing walkable will remain."
 			" Use more than %.1f.", agentRadius, minUsefulWidth);
+	}
+
+	ImGui::SliderFloat("End Extension", &m_state->m_endExtension, 0.0f, 20.0f, "%.1f");
+
+	if (ImGui::IsItemHovered())
+	{
+		ImGui::SetTooltip("How far a steep patch overshoots each clicked point.\n\n"
+			"Recast strips walkable surface back from every drop-off, so a patch\n"
+			"that stops exactly at the ledge it climbs to ends inside that dead\n"
+			"band and comes out disconnected. Overshooting makes the surfaces\n"
+			"overlap instead. Patches shallower than %.0f degrees are left alone.",
+			kSteepPatchSlopeDegrees);
 	}
 
 	if (m_state->m_hitPosSet)
@@ -232,6 +281,8 @@ void MeshPatchTool::handleMenu()
 
 		if (open)
 		{
+			m_state->m_editModified |= ImGui::InputText("Name", &m_state->m_editName);
+
 			if (!m_state->m_editSupported)
 			{
 				ImGui::TextDisabled("%d vertices - not a two point patch, so not editable here.",
@@ -263,15 +314,12 @@ void MeshPatchTool::handleMenu()
 					ImGui::SliderFloat("Width", &m_state->m_editWidth, 1.0f, 100.0f, "%.1f");
 			}
 
-			if (m_state->m_editSupported)
-			{
-				ImGui::BeginDisabled(!m_state->m_editModified);
+			ImGui::BeginDisabled(!m_state->m_editModified);
 
-				if (ImGui::Button("Save Changes"))
-					save = true;
+			if (ImGui::Button("Save Changes"))
+				save = true;
 
-				ImGui::EndDisabled();
-			}
+			ImGui::EndDisabled();
 
 			ImGui::TreePop();
 		}
@@ -329,25 +377,32 @@ void MeshPatchToolState::reset()
 {
 	m_hitPosSet = false;
 	m_currentPatchId = 0;
-	m_widthInitialized = false;
+	m_defaultsInitialized = false;
 	m_editId = 0;
 	m_editModified = false;
 }
 
-void MeshPatchToolState::initWidthFromConfig()
+void MeshPatchToolState::initDefaultsFromConfig()
 {
-	if (m_widthInitialized)
+	if (m_defaultsInitialized)
 		return;
 
 	auto navMesh = m_meshTool->GetNavMesh();
 	if (!navMesh)
 		return;
 
+	const NavMeshConfig& config = navMesh->GetNavMeshConfig();
+
 	// The narrowest strip that survives erosion, plus a little slack. Patches are mostly used
 	// to define a path through somewhere the generator gave up on, not to floor an area, so
 	// starting wide just means overwriting geometry that did not need it.
-	m_width = navMesh->GetNavMeshConfig().agentRadius * 2.0f + 2.0f;
-	m_widthInitialized = true;
+	m_width = config.agentRadius * 2.0f + 2.0f;
+
+	// One cell for the ledge filter, one agent radius for erosion, and another as margin so
+	// the surfaces genuinely overlap rather than just touching at the far edge of the band.
+	m_endExtension = config.cellSize + config.agentRadius * 2.0f;
+
+	m_defaultsInitialized = true;
 }
 
 // Puts a newly added patch's geometry into the collision mesh and reports the tiles that need
@@ -419,8 +474,14 @@ std::vector<dtTileRef> MeshPatchToolState::handlePatchClick(const glm::vec3& p, 
 
 	m_hitPosSet = false;
 
+	// Applied here rather than in BuildPatchRing, so that editing a patch afterwards moves it
+	// to exactly where the fields say. Extending again on every save would creep.
+	glm::vec3 from = m_hitPos;
+	glm::vec3 to = p;
+	ExtendSteepEnds(from, to, m_endExtension);
+
 	MeshPatch* patch = navMesh->AddMeshPatch(
-		BuildPatchRing(m_hitPos, p, m_width), std::string());
+		BuildPatchRing(from, to, m_width), std::string());
 
 	return commitPatch(patch);
 }
@@ -459,6 +520,7 @@ void MeshPatchToolState::beginEdit(const MeshPatch* patch)
 {
 	m_editId = patch->id;
 	m_editModified = false;
+	m_editName = patch->name;
 
 	if (patch->type == MeshPatchType::Box)
 	{
@@ -476,11 +538,19 @@ void MeshPatchToolState::beginEdit(const MeshPatch* patch)
 std::vector<dtTileRef> MeshPatchToolState::saveEdit()
 {
 	auto navMesh = m_meshTool->GetNavMesh();
-	if (!navMesh || m_editId == 0 || !m_editSupported)
+	if (!navMesh || m_editId == 0)
 		return {};
 
 	MeshPatch* patch = navMesh->GetMeshPatchById(m_editId);
 	if (!patch)
+		return {};
+
+	// Costs nothing to apply: the name is not build input, so no tile has to change for it.
+	// It is also the one thing editable on a patch whose geometry this editor cannot describe.
+	patch->name = m_editName;
+	m_editModified = false;
+
+	if (!m_editSupported)
 		return {};
 
 	std::vector<glm::vec3> verts;
@@ -500,7 +570,10 @@ std::vector<dtTileRef> MeshPatchToolState::saveEdit()
 		verts = BuildPatchRing(from_eq_coord(m_editPos), from_eq_coord(m_editSize), m_editWidth);
 	}
 
-	m_editModified = false;
+	// A rename on its own leaves the geometry alone, and regenerating the collision mesh for
+	// it would be a few seconds spent to change a label.
+	if (verts == patch->verts)
+		return {};
 
 	return updatePatch(m_editId, verts);
 }
