@@ -137,6 +137,13 @@ void NavMesh::ResetSavedData(PersistedDataFields fields)
 		m_nextVolumeId = 1;
 	}
 
+	if (+(fields & PersistedDataFields::MeshPatches))
+	{
+		m_patches.clear();
+		m_patchesById.clear();
+		m_nextPatchId = 1;
+	}
+
 	if (+(fields & PersistedDataFields::Connections))
 	{
 		m_connections.clear();
@@ -313,6 +320,35 @@ static void ToProto(nav::ConvexVolume& out_proto, const ConvexVolume& volume)
 	}
 }
 
+static void ToProto(nav::MeshPatch& out_proto, const MeshPatch& patch)
+{
+	out_proto.set_id(patch.id);
+	out_proto.set_name(patch.name);
+	out_proto.set_type(static_cast<uint32_t>(patch.type));
+
+	for (const auto& vert : patch.verts)
+	{
+		nav::vector3* out_vert = out_proto.add_vertices();
+		ToProto(*out_vert, vert);
+	}
+}
+
+static std::unique_ptr<MeshPatch> FromProto(const nav::MeshPatch& proto)
+{
+	auto patch = std::make_unique<MeshPatch>();
+
+	patch->id = proto.id();
+	patch->name = proto.name();
+	patch->type = static_cast<MeshPatchType>(proto.type());
+
+	for (const auto& vert : proto.vertices())
+	{
+		patch->verts.push_back(FromProto(vert));
+	}
+
+	return patch;
+}
+
 static std::unique_ptr<ConvexVolume> FromProto(const nav::ConvexVolume& proto)
 {
 	auto volume = std::make_unique<ConvexVolume>();
@@ -474,6 +510,22 @@ void NavMesh::LoadFromProto(const nav::NavMeshFile& proto, PersistedDataFields f
 		m_nextVolumeId = (result != std::end(m_volumes) ? (*result)->id : 0) + 1;
 	}
 
+	if (+(fields & PersistedDataFields::MeshPatches))
+	{
+		for (const auto& proto_patch : proto.mesh_patches())
+		{
+			std::unique_ptr<MeshPatch> patch = FromProto(proto_patch);
+			m_patchesById.emplace(patch->id, patch.get());
+			m_patches.push_back(std::move(patch));
+		}
+
+		auto result =
+			std::max_element(std::begin(m_patches), std::end(m_patches),
+				[](const auto& l, const auto& r) { return l->id < r->id; });
+
+		m_nextPatchId = (result != std::end(m_patches) ? (*result)->id : 0) + 1;
+	}
+
 	if (+(fields & PersistedDataFields::Connections))
 	{
 		// load connections
@@ -519,6 +571,15 @@ void NavMesh::SaveToProto(nav::NavMeshFile& proto, PersistedDataFields fields)
 		{
 			nav::ConvexVolume* proto_vol = proto.add_convex_volumes();
 			ToProto(*proto_vol, *volume);
+		}
+	}
+
+	if (+(fields & PersistedDataFields::MeshPatches))
+	{
+		for (const auto& patch : m_patches)
+		{
+			nav::MeshPatch* proto_patch = proto.add_mesh_patches();
+			ToProto(*proto_patch, *patch);
 		}
 	}
 
@@ -866,6 +927,43 @@ ConvexVolume* NavMesh::AddConvexVolume(const std::vector<glm::vec3>& verts,
 	volume->name = name;
 
 	return AddConvexVolume(std::move(volume));
+}
+
+MeshPatch* NavMesh::AddMeshPatch(std::unique_ptr<MeshPatch> patch)
+{
+	patch->id = m_nextPatchId++;
+
+	MeshPatch* result = patch.get();
+	m_patches.push_back(std::move(patch));
+	m_patchesById.emplace(result->id, result);
+
+	return result;
+}
+
+MeshPatch* NavMesh::AddMeshPatch(const std::vector<glm::vec3>& verts, const std::string& name)
+{
+	auto patch = std::make_unique<MeshPatch>();
+	patch->verts = verts;
+	patch->name = name;
+
+	return AddMeshPatch(std::move(patch));
+}
+
+MeshPatch* NavMesh::GetMeshPatchById(uint32_t id)
+{
+	auto iter = m_patchesById.find(id);
+	return iter != m_patchesById.end() ? iter->second : nullptr;
+}
+
+void NavMesh::DeleteMeshPatchById(uint32_t id)
+{
+	auto iter = std::find_if(m_patches.begin(), m_patches.end(),
+		[id](const auto& ptr) { return ptr->id == id; });
+	if (iter != m_patches.end())
+	{
+		m_patchesById.erase((*iter)->id);
+		m_patches.erase(iter);
+	}
 }
 
 void NavMesh::DeleteConvexVolumeById(uint32_t id)

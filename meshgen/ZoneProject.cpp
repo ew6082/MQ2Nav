@@ -466,6 +466,8 @@ bool ZoneProject::BuildCollisionMesh()
 
 	if (m_resourceMgr->BuildCollisionMesh(*m_collisionMesh))
 	{
+		AddMeshPatchesToCollisionMesh();
+
 		m_meshBMin = m_collisionMesh->m_boundsMin;
 		m_meshBMax = m_collisionMesh->m_boundsMax;
 
@@ -473,6 +475,30 @@ bool ZoneProject::BuildCollisionMesh()
 	}
 
 	return false;
+}
+
+// Mesh patches are user authored geometry, added after the zone's own so that a patch can
+// lie over the surface it is repairing. They are ordinary triangles from here on: Recast
+// voxelizes them like anything else, which is the point - the generator gets a clean
+// surface to work from rather than having its output corrected afterwards.
+void ZoneProject::AddMeshPatchesToCollisionMesh()
+{
+	auto navMesh = GetNavMesh();
+	if (!navMesh)
+		return;
+
+	for (const auto& patch : navMesh->GetMeshPatches())
+	{
+		// Triangulated as a fan, so the ring has to be convex to come out right. The tool
+		// only produces quads; a ring built by hand is the user's responsibility.
+		if (patch->verts.size() < 3)
+			continue;
+
+		for (size_t i = 1; i + 1 < patch->verts.size(); ++i)
+		{
+			m_collisionMesh->addTriangle(patch->verts[0], patch->verts[i], patch->verts[i + 1]);
+		}
+	}
 }
 
 

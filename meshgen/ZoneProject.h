@@ -179,6 +179,7 @@ public:
 private:
 	bool LoadZoneData();  // Load zone data from EQ folder
 	bool BuildCollisionMesh(); // Generate chunky triangle mesh
+	void AddMeshPatchesToCollisionMesh();
 
 	void OnLoadZoneComplete(bool success, const ResultState& result);
 

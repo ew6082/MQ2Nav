@@ -144,6 +144,38 @@ struct ConvexVolume
 
 //----------------------------------------------------------------------------
 
+// A surface added to the collision mesh before the navmesh is generated, for the places
+// the generator cannot produce connected mesh on its own: steep ground, cracked or jagged
+// floors, and zones whose designers ran several ground surfaces through one another.
+//
+// A convex volume marked Ground can restore spans that erosion deleted, but only spans
+// that rasterization produced in the first place. A patch fixes the input instead, so the
+// spans are generated, filtered and joined into regions normally.
+//
+// This is a build input only. It is saved so MeshGenerator can rebuild from it later; the
+// plugin reads the finished mesh and has no interest in what shaped it.
+enum struct MeshPatchType : uint8_t
+{
+	// A plain surface fed to the collision mesh. Slope and erosion apply to it as they do
+	// to any other geometry. Zero, so a patch written before the type existed reads as one.
+	Surface = 0,
+};
+
+struct MeshPatch
+{
+	uint32_t id = 0;
+
+	// Ordered ring of at least three vertices, triangulated as a fan. A flat rectangle and
+	// a sloped strip bridging two ledges are both just rings.
+	std::vector<glm::vec3> verts;
+
+	MeshPatchType type = MeshPatchType::Surface;
+
+	std::string name;
+};
+
+//----------------------------------------------------------------------------
+
 // Max Zone Extents
 // these are the limits to the extents of geometry we are willing to load. This
 // is used to exclude junk geometry from very far away parts of the mesh. Values
