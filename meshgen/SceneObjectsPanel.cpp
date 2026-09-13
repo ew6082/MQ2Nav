@@ -6,6 +6,7 @@
 #include "imgui/scoped_helpers.h"
 #include "meshgen/Editor.h"
 #include "meshgen/Scene.h"
+#include "meshgen/ZoneRenderManager.h"
 
 #include "entt/entity/handle.hpp"
 
@@ -49,7 +50,11 @@ void SceneObjectsPanel::OnImGuiRender(bool* p_open)
 			{
 				if (ImGui::Button("Rebuild collision mesh"))
 				{
-					m_project->RebuildCollisionMesh();
+					if (m_project->RebuildCollisionMesh() && g_zoneRenderManager)
+					{
+						// The collision view draws from buffers built off the old mesh.
+						g_zoneRenderManager->Rebuild();
+					}
 				}
 
 				ImGui::SameLine();
