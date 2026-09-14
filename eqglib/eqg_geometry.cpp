@@ -1833,9 +1833,23 @@ void Actor::SetPosition(const glm::vec3& pos)
 void Actor::SetOrientation(const glm::vec3& orientation)
 {
 	m_orientation = orientation;
+	m_rotation = glm::quat(orientation);
 
 	m_worldTransform = glm::translate(glm::mat4(1.0f), m_position)
-		* glm::toMat4(glm::quat(m_orientation))
+		* glm::toMat4(m_rotation)
+		* glm::scale(glm::mat4(1.0f), glm::vec3(m_scale));
+	m_dirty = true;
+}
+
+// The angles are left as they were: they are what the actor was placed with in the file, and
+// a rotation that did not come from a set of angles has none to report. Converting back would
+// mean picking a composition convention, which is the thing this exists to avoid.
+void Actor::SetRotation(const glm::quat& rotation)
+{
+	m_rotation = rotation;
+
+	m_worldTransform = glm::translate(glm::mat4(1.0f), m_position)
+		* glm::toMat4(m_rotation)
 		* glm::scale(glm::mat4(1.0f), glm::vec3(m_scale));
 	m_dirty = true;
 }
@@ -1845,7 +1859,7 @@ void Actor::SetScale(float scale)
 	m_scale = scale;
 
 	m_worldTransform = glm::translate(glm::mat4(1.0f), m_position)
-		* glm::toMat4(glm::quat(m_orientation))
+		* glm::toMat4(m_rotation)
 		* glm::scale(glm::mat4(1.0f), glm::vec3(m_scale));
 	m_dirty = true;
 }
