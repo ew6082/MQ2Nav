@@ -1079,7 +1079,13 @@ void NavMesh::UpdateArea(const PolyAreaType& areaType)
 			m_polyAreas[areaType.id].cost = areaType.cost;
 		}
 
-		if (areaType.selectable)
+		// Decided from the stored record rather than the incoming one. A user defined area
+		// has just been marked selectable above whatever it arrived as, and a built-in keeps
+		// the selectability it was initialized with, since only its color and cost are taken
+		// from the caller. Reading it off the argument meant an area loaded from a file - a
+		// path that never sets the field - was stored but left out of the selectable list,
+		// and the list is what gets written back out, so the area vanished on the next save.
+		if (m_polyAreas[areaType.id].selectable)
 		{
 			m_polyAreaList.push_back(&m_polyAreas[areaType.id]);
 		}
