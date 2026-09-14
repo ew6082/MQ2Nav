@@ -524,6 +524,20 @@ void NavMesh::SaveToProto(nav::NavMeshFile& proto, PersistedDataFields fields)
 
 	if (+(fields & PersistedDataFields::AreaTypes))
 	{
+		// A built-in area that still matches its default is normally left out, on the grounds
+		// that whatever reads the file already knows what it is. That only holds while both
+		// ends agree on the set of built-ins: an area added later is unknown to anything
+		// older, which resolves it to a nameless area at cost 1 and quietly ignores what the
+		// volume was marked for. So any area a volume actually refers to is always written,
+		// and the mesh describes everything it uses regardless of who reads it.
+		std::array<bool, static_cast<int>(PolyArea::Last) + 1> areaInUse{};
+
+		for (const auto& volume : m_volumes)
+		{
+			if (volume->areaType < areaInUse.size())
+				areaInUse[volume->areaType] = true;
+		}
+
 		// save area definitions
 		for (const PolyAreaType* area : m_polyAreaList)
 		{
@@ -531,7 +545,7 @@ void NavMesh::SaveToProto(nav::NavMeshFile& proto, PersistedDataFields fields)
 			if (area->id == (uint8_t)PolyArea::Unwalkable)
 				continue;
 
-			if (!IsUserDefinedPolyArea(area->id))
+			if (!IsUserDefinedPolyArea(area->id) && !areaInUse[area->id])
 			{
 				if (area->id < DefaultPolyAreas.size()
 					&& *area == DefaultPolyAreas[area->id])
