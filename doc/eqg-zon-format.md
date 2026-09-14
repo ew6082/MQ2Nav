@@ -197,13 +197,13 @@ looks like the intended behaviour. `m_aabb` currently feeds only
 `BuildConvexHull` in `GeometryUtils.cpp`. This is left as found - noted here
 rather than changed, since it is unrelated to placement and untested.
 
-Instance rotations: an open problem
------------------------------------
+Instance rotations
+------------------
 
 `SZONInstance::rotation` is three Euler angles in the file's own coordinate
 frame. Model vertices are stored pre-swizzled by `.yzx` (`InitFromEQGData`), so
 the rotation has to be moved into that same frame before it is applied.
-`ParseZone` does that by permuting the Euler components:
+`ParseZone` used to do that by permuting the Euler components:
 
 ```c
     orientation = glm::vec3(rotation.z, rotation.y, rotation.x).yzx;   // (ry, rx, rz)
@@ -213,7 +213,7 @@ Permuting components is not, in general, the same thing as changing frames. It
 agrees with the real conversion only when the rotations commute - when at most
 one axis is non-zero - because `glm::quat(vec3)` composes its three angles in a
 fixed order and the permutation reorders them. The conversion that is always
-correct conjugates the rotation:
+correct conjugates the rotation by the same swizzle the vertices get:
 
 ```
     P maps (x, y, z) -> (y, z, x)
@@ -232,25 +232,51 @@ candlemakers is the zone that exposes it. `OBJ_CaveWallBoulder_b.MOD` at
 `(-284.83, -81.76, 1412.71)` with rotation `(117.86, -64.61, -67.55)` degrees is
 a clear case: the mesh sits well away from its instance origin, so a wrongly
 composed rotation swings a wall-sized rock below the map, leaving the
-stalactites above it floating.
+stalactites above it floating. The 49 `OBJ_CaveMound` instances near
+`/loc -278, 41, 36` are another: 46 of them rotate on more than one axis, and
+they are what makes the ceiling there read as solid rock rather than a hole.
 
-### Why the obvious fix does not work
+### How the convention was pinned down
 
-Computing `R_world` as above and then handing it back as Euler angles through
-`glm::eulerAngles` fixes candlemakers and breaks everything else - tried, and
-reverted. `glm::eulerAngles` and the `glm::quat(vec3)` constructor do not agree
-on a composition convention, so the round trip does not reproduce the rotation
-it was given. `TransformComponent::SetRotation` in `meshgen/Components.h`
-already carries a hand-written correction for a symptom of the same
-inconsistency, which is a good warning sign.
+Two things are unknown up front - which permutation `P` is, and which order the
+three stored angles compose in - so there are 6 x 6 candidates, and guessing
+between them is what made the first attempt at this fail.
 
-A real fix has to keep the rotation as a matrix or quaternion the whole way
-instead of passing Euler angles between stages. `TransformComponent` already
-stores a `glm::quat` and exposes `SetRotation(quat)`; it is `eqg::Actor` that
-holds its orientation as Euler angles and would need to carry a quaternion
-instead. Until that is done the multi-axis case stays wrong, and it is wrong in
-upstream too.
+The constraint that settles it: single-axis instances already render correctly,
+so the right candidate must reproduce the old result on **every** one of them,
+and differ only on multi-axis ones. Scoring all 36 against candlemakers leaves
+three:
 
+| candidate | frame | angle order | differs on multi-axis |
+| --------- | ----- | ----------- | --------------------- |
+| 2         | `012` | `102`       | 0 of 5214             |
+| 23        | `120` | `210`       | 3843 of 5214          |
+| 25        | `201` | `021`       | 3748 of 5214          |
+
+Candidate 2 is the old code restated - `.yzx` of `(rz, ry, rx)` is `(ry, rx,
+rz)` - which is why it differs on nothing, and it doubles as a check that the
+scoring is sound. Candidates 23 and 25 are inverses of each other, and 23 is the
+one whose frame permutation is the `.yzx` swizzle the vertices actually get.
+
+`eqg_loader.cpp` keeps a cheap version of that check permanently: it counts
+single-axis instances whose rotation the conversion moved, and logs an error if
+any did, since those were correct before and a change there means the conversion
+is wrong.
+
+### Why it could not be done with Euler angles
+
+Computing `R_world` and handing it back through `glm::eulerAngles` fixes
+candlemakers and breaks everything else - tried, and reverted. `glm::eulerAngles`
+and the `glm::quat(vec3)` constructor do not agree on a composition convention,
+so the round trip does not reproduce the rotation it was given.
+`TransformComponent::SetRotation` in `meshgen/Components.h` still carries a
+hand-written correction for a symptom of the same inconsistency.
+
+`eqg::Actor` therefore carries a `glm::quat` alongside its Euler angles, set by
+`SetRotation`, and `ZoneResourceManager::AddActor` takes that quaternion rather
+than the angles. `TransformComponent` builds its matrix from a quaternion
+already, and its `rotationEuler` field was write-only, so nothing downstream
+needed changing. Upstream still has the reordering.
 
 Animated instances: `.ani` files and hierarchical models
 --------------------------------------------------------
@@ -299,7 +325,7 @@ whose own extent is 400 x 354 x 59.
 
 ### Four things that were wrong with the hierarchical path
 
-All four are fixed here, unlike the rotation problem above, which is not. Worth
+All four are fixed here, as is the rotation problem above. Worth
 recording together, because they compounded and each one masked the next - the
 600x scale error hid the rest until it was out of the way:
 
