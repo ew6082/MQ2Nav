@@ -447,6 +447,12 @@ void ZoneRenderManager::RenderEntities()
 	if (!m_project || !m_project->GetScene())
 		return;
 
+	// This draws the zone's own areas - water, lava, teleports - as coloured boxes, while
+	// AreaVolumeRenderSystem handles the convex WLD areas. The Area Volumes toggle only
+	// ever reached that system, so it had no effect on these; honour it here too.
+	if (!GetDrawAreaVolumes())
+		return;
+
 	const auto& scene = m_project->GetScene();
 	auto& registry = scene->GetRegistry();
 

@@ -55,9 +55,16 @@ void ViewPanel::OnImGuiRender(bool* p_open)
 		ImGui::EndDisabled();
 		ImGui::Unindent();
 
+		// Top level, not nested under Draw Textured: these draw in both the textured and
+		// the collision view, and the checkbox turns them off in both.
 		bool drawAreaVolumes = renderManager->GetDrawAreaVolumes();
 		if (ImGui::Checkbox("Area Volumes", &drawAreaVolumes))
 			renderManager->SetDrawAreaVolumes(drawAreaVolumes);
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("The zone's own water, lava and teleport volumes");
+		}
 
 		bool drawGrid = renderManager->GetDrawGrid();
 		if (ImGui::Checkbox("Draw Grid", &drawGrid))
