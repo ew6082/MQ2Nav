@@ -176,9 +176,14 @@ public:
 	bool IsCollisionMeshDirty() const { return m_collisionMeshDirty; }
 	bool RebuildCollisionMesh();
 
+	// Adds one mesh patch's geometry to the collision mesh in memory, so rebuilding tiles
+	// picks it up without regenerating the whole collision mesh.
+	bool AddMeshPatchGeometry(const MeshPatch& patch);
+
 private:
 	bool LoadZoneData();  // Load zone data from EQ folder
 	bool BuildCollisionMesh(); // Generate chunky triangle mesh
+	void AddMeshPatchesToCollisionMesh();
 
 	void OnLoadZoneComplete(bool success, const ResultState& result);
 
