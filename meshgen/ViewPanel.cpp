@@ -66,6 +66,33 @@ void ViewPanel::OnImGuiRender(bool* p_open)
 			ImGui::SetTooltip("The zone's own water, lava and teleport volumes");
 		}
 
+		ImGui::Indent();
+		ImGui::BeginDisabled(!drawAreaVolumes);
+
+		bool drawAreaWater = renderManager->GetDrawAreaWater();
+		if (ImGui::Checkbox("Water", &drawAreaWater))
+			renderManager->SetDrawAreaWater(drawAreaWater);
+
+		bool drawAreaLava = renderManager->GetDrawAreaLava();
+		if (ImGui::Checkbox("Lava", &drawAreaLava))
+			renderManager->SetDrawAreaLava(drawAreaLava);
+
+		bool drawAreaTeleport = renderManager->GetDrawAreaTeleport();
+		if (ImGui::Checkbox("Teleports", &drawAreaTeleport))
+			renderManager->SetDrawAreaTeleport(drawAreaTeleport);
+
+		bool drawAreaOther = renderManager->GetDrawAreaOther();
+		if (ImGui::Checkbox("Other", &drawAreaOther))
+			renderManager->SetDrawAreaOther(drawAreaOther);
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("Slime, fog, portals, and areas carrying only a flag such as kill or slippery");
+		}
+
+		ImGui::EndDisabled();
+		ImGui::Unindent();
+
 		bool drawGrid = renderManager->GetDrawGrid();
 		if (ImGui::Checkbox("Draw Grid", &drawGrid))
 			renderManager->SetDrawGrid(drawGrid);
