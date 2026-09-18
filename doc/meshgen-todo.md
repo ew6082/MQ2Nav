@@ -63,7 +63,7 @@ approaches:
   direct path and `path(current -> pad) + cost + path(exit -> goal)`. Costs a
   teleport correctly regardless of distance, and shares its "path leg, action,
   path leg" machinery with items 1 and 2.
-* Faked intermediate landings - see "Floating platforms" below. Keeps
+* Faked intermediate landings - see "Recovering walkable surface" below. Keeps
   everything inside Detour, but a 2000 unit hop needs about 26 platforms at the
   default tile size, and Detour costs by distance so the chain prices like
   walking.
@@ -116,32 +116,41 @@ valid. It then fails to link at runtime with nothing said. It also never checks
 the `walkableClimb` proximity above. Small, self contained fix.
 
 
-Floating platforms
-------------------
+Recovering walkable surface Recast will not generate
+----------------------------------------------------
 
-A tool to place a disconnected rectangle of navmesh - corner position plus
-horizontal size - to hang connections off, and to patch places the generator
-leaves bare.
+**Done** - the mesh patch tool (`MeshPatchTool`) covers this. Two clicks lay a
+strip between the points; a block form takes a position and L/W/H. The geometry
+is injected into the collision mesh, so Recast voxelizes it like any other
+geometry and connections can link to it normally.
 
-This fits the existing pattern rather than fighting it. `ConvexVolume` is
-already user authored data: a proto message, a repeated field in `NavMeshFile`,
-and consumed at build time in `NavMeshBuilder`. Convex volumes can already
-subtract, by marking `PolyArea::Unwalkable`; a platform is the missing additive
-half. Inject the quad into the collision mesh during
-`ZoneResourceManager::BuildCollisionMesh` and Recast voxelizes it into real
-polygons like any other geometry, so connections can link to it normally.
+The reasoning is worth keeping, because it is what decides whether a given
+problem can be fixed with an area type or needs geometry:
 
-Constraints to respect:
+* `rcErodeWalkableArea` nulls **areas** on spans that are already in the compact
+  heightfield, so `rcMarkConvexPolyArea` can put them back. A Ground convex
+  volume rescuing a narrow ledge is doing exactly this.
+* `rcFilterLedgeSpans` nulls **spans** on the solid heightfield, before
+  compaction, and `rcBuildCompactHeightfield` skips `RC_NULL_AREA` spans
+  entirely. The span does not exist by the time any area marking runs, so
+  nothing downstream can recover it.
 
-* Recast erodes the walkable area by `agentRadius` (default 2.0) on every side,
-  so a rectangle must exceed 4 units square to leave anything at all, and
-  realistically wants 8 or more to give a usable polygon at `cellSize` 0.6.
+Steep hillsides past the walkable slope, gaps narrower than the agent, and
+cracked or interpenetrating floors are the second case. Only new geometry fixes
+those.
+
+Constraints the tool has to respect, and does:
+
+* Recast erodes by `agentRadius` on every side, and a raised strip has a drop on
+  **both** sides, so each side also loses a cell to the ledge filter. The width
+  default is `agentRadius * 4 + cellSize * 2` for that reason; anything narrower
+  is eroded away entirely while still looking correct in the editor.
 * It must lie inside the navmesh bounds or no tile covers it.
-* It must lie inside the max extents if set. `ZoneCollisionMesh::addTriangle`
-  drops out of extent triangles **silently** - this is what hid the oversized
-  rubble for so long - so a platform placed outside would vanish with no
-  explanation. Worth warning about at placement time.
 
+Note on extents, corrected: `ZoneCollisionMesh::addTriangle(vec3, vec3, vec3)`
+does **not** filter by max extents. That filtering is on the actor path only, so
+patch geometry is not silently dropped for being outside them. An earlier note
+here claimed otherwise and was wrong.
 
 Editing individual mesh vertices
 --------------------------------
@@ -159,7 +168,7 @@ Worth being clear that it sits badly with the current pipeline:
 
 So a literal vertex editor is write-only-until-rebuild, which is a poor trade.
 The same goal is better served by inputs the generator respects and that
-survive a rebuild: floating platforms to add, convex volumes marked
+survive a rebuild: mesh patches to add, convex volumes marked
 `Unwalkable` to subtract. Worth revisiting only if there are defects those two
 cannot express.
 
@@ -175,13 +184,11 @@ Smaller known items
 * `MGHierarchicalModel` still builds GPU buffers per instance, the duplication
   already fixed for simple models. Only matters on a zone with many animated
   models.
-* `MGTerrain::BuildGPUBuffers` does `resize(N)` then `push_back` in its fill
-  loop, so the terrain vertex buffer is 2N with half of it unused padding.
 * Draw call volume is one draw per object per material batch, which can
   approach the bgfx limit of 65536 on a large zone. `RenderManager::EndFrame`
   warns when a frame gets close. Real instancing is the fix, and
   `MeshInstanceData` in `RenderBatch.cpp` looks set up for it but unused.
-* Multi-axis instance rotations are wrong - see `eqg-zon-format.md`. Unfixed,
-  and wrong in upstream too.
 * The plugin DLL does not build on develop: upstream put `common/ZoneData`
-  under `#if 0` without updating `plugin/ModelLoader.cpp`.
+  under `#if 0` without updating `plugin/ModelLoader.cpp`. This blocks running
+  a plugin that understands anything added meshgen-side, including the High
+  Avoid area type.
