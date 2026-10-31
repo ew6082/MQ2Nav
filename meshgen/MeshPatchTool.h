@@ -26,8 +26,14 @@ public:
 	void reset() override;
 	void handleMenu() override;
 	void handleClick(const glm::vec3& p, bool shift) override;
+	void handleRenderOverlay() override;
 
 private:
+	// The properties panel under the list: the next new patch when nothing is selected, the
+	// selected patch otherwise.
+	void drawCreator(float agentRadius);
+	void drawEditor(const MeshPatch* patch);
+
 	NavMeshTool* m_meshTool = nullptr;
 	MeshPatchToolState* m_state = nullptr;
 };
@@ -112,7 +118,7 @@ private:
 	glm::vec3 m_blockPos{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 m_blockSize{ 20.0f, 20.0f, 4.0f };
 
-	// The patch open for editing and its values in flight. Editing writes here rather than to
+	// The selected patch - highlighted in the scene - and its values in flight. Editing writes here rather than to
 	// the patch, because applying a change regenerates the whole collision mesh - far too
 	// expensive to do per keystroke, and reading the patch back every frame would snap a
 	// slider to where the drag started. Only one patch is open at a time so there is never a

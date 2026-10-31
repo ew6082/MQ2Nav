@@ -6,6 +6,8 @@
 
 #include "common/MathUtil.h"
 #include "common/NavMeshData.h"
+#include "common/Utilities.h"
+#include "imgui/ImGuiUtils.h"
 #include "meshgen/Application.h"
 #include "meshgen/Editor.h"
 #include "meshgen/NavMeshTool.h"
@@ -128,6 +130,132 @@ static bool CameraButton(const char* id, glm::vec3& outPosEq)
 	return true;
 }
 
+// Patch outlines are orange. The selected patch uses the same highlight as the selected volume
+// in the area tool, so a selection looks the same in every tool.
+static const uint32_t kPatchColor = duRGBA(255, 140, 0, 220);
+static const uint32_t kHighlightFill = duRGBA(255, 220, 64, 72);
+static const uint32_t kHighlightSide = duRGBA(255, 220, 64, 40);
+static const uint32_t kHighlightLine = duRGBA(255, 220, 64, 255);
+
+// Perimeter of a surface patch. A strip is pairs along its length rather than a ring, so walk
+// one side out and the other back. Legacy four vertex patches are already a ring.
+static std::vector<glm::vec3> SurfaceRing(MeshPatchType type, const std::vector<glm::vec3>& verts)
+{
+	const size_t n = verts.size();
+	std::vector<glm::vec3> ring;
+
+	if (type == MeshPatchType::Strip)
+	{
+		if (n < 4 || n % 2 != 0)
+			return ring;
+
+		for (size_t j = 0; j < n; j += 2)
+			ring.push_back(verts[j]);
+
+		for (size_t j = n; j > 0; j -= 2)
+			ring.push_back(verts[j - 1]);
+	}
+	else
+	{
+		ring = verts;
+	}
+
+	return ring;
+}
+
+// Appends a patch's edges to a line batch already begun. Surfaces are lifted a little so they
+// are not lost in the mesh they lie on.
+static void AppendPatchOutline(ZoneRenderDebugDraw& dd, MeshPatchType type,
+	const std::vector<glm::vec3>& verts, uint32_t color, float lift)
+{
+	if (type == MeshPatchType::Box)
+	{
+		if (verts.size() < 2)
+			return;
+
+		// Two corners, so there is no ring to walk - draw the twelve edges.
+		const glm::vec3 lo = glm::min(verts[0], verts[1]);
+		const glm::vec3 hi = glm::max(verts[0], verts[1]);
+
+		duAppendBoxWire(&dd, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, color);
+		return;
+	}
+
+	const std::vector<glm::vec3> ring = SurfaceRing(type, verts);
+
+	for (size_t j = 0; j < ring.size(); ++j)
+	{
+		const glm::vec3& a = ring[j];
+		const glm::vec3& b = ring[(j + 1) % ring.size()];
+
+		dd.vertex(a.x, a.y + lift, a.z, color);
+		dd.vertex(b.x, b.y + lift, b.z, color);
+	}
+}
+
+// The selected patch: a translucent fill and a solid, thicker outline. A block is inflated a
+// touch so its faces do not fight with the block's own geometry; a surface is lifted above
+// the outline height the others use.
+static void DrawPatchHighlight(ZoneRenderDebugDraw& dd, MeshPatchType type,
+	const std::vector<glm::vec3>& verts)
+{
+	if (type == MeshPatchType::Box)
+	{
+		if (verts.size() < 2)
+			return;
+
+		constexpr float kInflate = 0.05f;
+		const glm::vec3 lo = glm::min(verts[0], verts[1]) - kInflate;
+		const glm::vec3 hi = glm::max(verts[0], verts[1]) + kInflate;
+
+		// top, bottom, then the four sides
+		const unsigned int faceColors[6] = { kHighlightFill, kHighlightFill,
+			kHighlightSide, kHighlightSide, kHighlightSide, kHighlightSide };
+
+		duDebugDrawBox(&dd, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, faceColors);
+		duDebugDrawBoxWire(&dd, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, kHighlightLine, 3.0f);
+		return;
+	}
+
+	constexpr float kLift = 0.15f;
+
+	// Both windings, so the fill shows from underneath as well - a patch is often looked at
+	// from below while lining it up against a ledge.
+	auto tri = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+	{
+		dd.vertex(a.x, a.y + kLift, a.z, kHighlightFill);
+		dd.vertex(b.x, b.y + kLift, b.z, kHighlightFill);
+		dd.vertex(c.x, c.y + kLift, c.z, kHighlightFill);
+
+		dd.vertex(a.x, a.y + kLift, a.z, kHighlightFill);
+		dd.vertex(c.x, c.y + kLift, c.z, kHighlightFill);
+		dd.vertex(b.x, b.y + kLift, b.z, kHighlightFill);
+	};
+
+	dd.begin(DU_DRAW_TRIS);
+
+	if (type == MeshPatchType::Strip)
+	{
+		// One quad per step along the strip, which follows the lips where a planar fan would not.
+		for (size_t j = 0; j + 3 < verts.size(); j += 2)
+		{
+			tri(verts[j], verts[j + 1], verts[j + 3]);
+			tri(verts[j], verts[j + 3], verts[j + 2]);
+		}
+	}
+	else
+	{
+		for (size_t j = 1; j + 1 < verts.size(); ++j)
+			tri(verts[0], verts[j], verts[j + 1]);
+	}
+
+	dd.end();
+
+	dd.begin(DU_DRAW_LINES, 3.0f);
+	AppendPatchOutline(dd, type, verts, kHighlightLine, kLift);
+	dd.end();
+}
+
 MeshPatchTool::MeshPatchTool()
 {
 }
@@ -164,10 +292,168 @@ void MeshPatchTool::handleMenu()
 
 	m_state->initDefaultsFromConfig();
 
-	ImGui::TextWrapped("Click a point on each side of the gap to lay a patch of geometry"
-		" between them. The navmesh is rebuilt from it, so the two sides join properly"
-		" instead of being bridged after the fact.");
+	// Laid out the same way as the area and connection tools: help, the list, the buttons
+	// under it, then the properties of whatever is selected - or of the next new patch, when
+	// nothing is.
+	if (mq::imgui::CollapsingSubHeader("Help"))
+	{
+		ImGui::TextWrapped("Patches lay geometry into the collision mesh. The navmesh is rebuilt"
+			" from it, so the two sides of a gap join properly instead of being bridged after"
+			" the fact.\n");
 
+		ImGui::TextWrapped("To lay a patch, click a point on each side of the gap. To create a solid"
+			" block, enter its position and size under 'Block' below.\n");
+
+		ImGui::TextWrapped("To edit an existing patch, click on it in the list. The selected patch"
+			" is highlighted in the scene, and while it has unsaved changes the outline of where it"
+			" will move to is drawn in white.");
+
+		ImGui::Separator();
+	}
+
+	// Selection can go stale underneath the tool: a project reload, or a patch removed some
+	// other way. A held id would then name nothing, or after renumbering, the wrong patch.
+	if (m_state->m_editId != 0 && !navMesh->GetMeshPatchById(m_state->m_editId))
+	{
+		m_state->m_editId = 0;
+		m_state->m_editModified = false;
+	}
+
+	size_t count = navMesh->GetMeshPatchCount();
+	ImGui::Text("%d Patches", static_cast<int>(count));
+	ImGui::BeginChild("PatchList", ImVec2(0, 200), true);
+
+	const float w = ImGui::GetContentRegionAvail().x;
+	const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+	const float button_sz = ImGui::GetFrameHeight();
+
+	ImGui::Columns(2, nullptr, false);
+
+	// Applied after the loop rather than while walking the list it reorders.
+	uint32_t moveId = 0;
+	size_t moveTo = 0;
+
+	for (size_t i = 0; i < count; ++i)
+	{
+		MeshPatch* patch = navMesh->GetMeshPatch(i);
+
+		ImGui::PushID(static_cast<int>(i));
+
+		const char* patchName = patch->name.empty() ? "unnamed" : patch->name.c_str();
+		std::string label = fmt::format("{:04}: {} ({})", patch->id, patchName,
+			patch->type == MeshPatchType::Box ? "Block" : "Patch");
+
+		ImGui::SetColumnWidth(-1, w - spacing * 2.0f - button_sz * 2.0f);
+
+		bool selected = (m_state->m_editId == patch->id);
+
+		if (ImGui::Selectable(label.c_str(), &selected) && selected)
+		{
+			m_state->m_hitPosSet = false;
+			m_state->beginEdit(patch);
+		}
+
+		ImGui::NextColumn();
+
+		ImGui::BeginDisabled(i == 0);
+		if (ImGui::ArrowButton("##up", ImGuiDir_Up))
+		{
+			moveId = patch->id;
+			moveTo = i - 1;
+		}
+		ImGui::EndDisabled();
+
+		ImGui::SameLine();
+
+		ImGui::BeginDisabled(i == count - 1);
+		if (ImGui::ArrowButton("##down", ImGuiDir_Down))
+		{
+			moveId = patch->id;
+			moveTo = i + 1;
+		}
+		ImGui::EndDisabled();
+
+		ImGui::NextColumn();
+
+		ImGui::PopID();
+	}
+
+	ImGui::Columns(1);
+	ImGui::EndChild();
+
+	if (moveId != 0)
+	{
+		// Order is only for the list - patches add geometry, so where one sits among the
+		// others changes nothing in the build and no tiles need rebuilding. Moving does
+		// renumber, though, so the selection is followed by patch rather than by id.
+		MeshPatch* selectedPatch = m_state->m_editId != 0
+			? navMesh->GetMeshPatchById(m_state->m_editId) : nullptr;
+
+		navMesh->MoveMeshPatchToIndex(moveId, moveTo);
+
+		if (selectedPatch)
+			m_state->m_editId = selectedPatch->id;
+	}
+
+	uint32_t deleteId = 0;
+
+	{
+		ImGui::BeginChild("##buttons", ImVec2(0, 30), false);
+		ImGui::Columns(3, 0, false);
+
+		if (ImGui::Button("Create New", ImVec2(-1, 0)))
+		{
+			m_state->m_editId = 0;
+			m_state->m_editModified = false;
+			m_state->m_hitPosSet = false;
+		}
+
+		ImGui::NextColumn();
+		ImGui::NextColumn();
+
+		if (m_state->m_editId != 0 && ImGuiEx::ColoredButton("Delete", ImVec2(-1, 0), 0.0))
+			deleteId = m_state->m_editId;
+
+		ImGui::Columns(1);
+		ImGui::EndChild();
+	}
+
+	if (m_state->m_editId != 0)
+	{
+		if (MeshPatch* patch = navMesh->GetMeshPatchById(m_state->m_editId))
+			drawEditor(patch);
+	}
+	else
+	{
+		drawCreator(agentRadius);
+	}
+
+	if (deleteId != 0)
+	{
+		// Collect the tiles before deleting: afterwards there is no patch to ask about.
+		auto modifiedTiles = navMesh->GetTilesIntersectingMeshPatch(deleteId);
+
+		navMesh->DeleteMeshPatchById(deleteId);
+
+		// Deleting renumbers what is left, so a held id would now name a different patch.
+		m_state->m_editId = 0;
+		m_state->m_editModified = false;
+
+		// Geometry can be appended to the collision mesh but not taken back out of it, so
+		// removing a patch means regenerating the whole thing before the tiles rebuild.
+		if (auto zoneProj = m_meshTool->GetZoneProj())
+			zoneProj->RebuildCollisionMesh();
+
+		if (!modifiedTiles.empty())
+			m_meshTool->RebuildTiles(modifiedTiles);
+	}
+}
+
+void MeshPatchTool::drawCreator(float agentRadius)
+{
+	auto navMesh = m_meshTool->GetNavMesh();
+
+	ImGui::Text("Create New Patch");
 	ImGui::Separator();
 
 	ImGui::SliderFloat("Width", &m_state->m_width, 1.0f, 100.0f, "%.1f");
@@ -229,15 +515,17 @@ void MeshPatchTool::handleMenu()
 	{
 		ImGui::TextColored(ImColor(0, 255, 0), "Click the far side of the gap.");
 
-		if (ImGui::Button("Cancel"))
+		if (ImGuiEx::ColoredButton("Cancel", ImVec2(0, 0), 0.0))
 			m_state->m_hitPosSet = false;
 	}
-
-	ImGui::Separator();
+	else
+	{
+		ImGui::TextColored(ImColor(0, 255, 0), "Place two points to lay a patch across a gap.");
+	}
 
 	// Block creator. Two clicks cannot describe a solid, and some repairs need one: a landing
 	// standing out of nothing, or a plug for a crack the floor falls through.
-	if (ImGui::CollapsingHeader("Block"))
+	if (mq::imgui::CollapsingSubHeader("Block"))
 	{
 		ImGui::TextWrapped("A solid box, entered rather than clicked. Position is the center"
 			" of the top face - the surface that gets walked on - in the same coordinates the"
@@ -261,117 +549,50 @@ void MeshPatchTool::handleMenu()
 				m_meshTool->RebuildTiles(modifiedTiles);
 		}
 	}
+}
 
+// The edit buffer holds a single patch, so only the selected one is ever shown here.
+void MeshPatchTool::drawEditor(const MeshPatch* patch)
+{
+	ImGui::Text("Edit %s", patch->type == MeshPatchType::Box ? "Block" : "Patch");
 	ImGui::Separator();
 
-	// Existing patches
-	size_t count = navMesh->GetMeshPatchCount();
-	ImGui::Text("%d patch%s", static_cast<int>(count), count == 1 ? "" : "es");
+	m_state->m_editModified |= ImGui::InputText("Name", &m_state->m_editName);
 
-	uint32_t deleteId = 0;
-
-	// Saving is deferred to after the loop: it regenerates the collision mesh and rebuilds
-	// tiles, which is not something to be doing while walking the patch list.
-	bool save = false;
-
-	for (size_t i = 0; i < count; ++i)
+	if (!m_state->m_editSupported)
 	{
-		MeshPatch* patch = navMesh->GetMeshPatch(i);
+		ImGui::TextDisabled("%d vertices - not a two point patch, so not editable here.",
+			static_cast<int>(patch->verts.size()));
+	}
+	else if (patch->type == MeshPatchType::Box)
+	{
+		static const char* const posLabels[3] = { "Y", "X", "Z" };
+		static const char* const sizeLabels[3] = { "L", "W", "H" };
 
-		ImGui::PushID(static_cast<int>(patch->id));
+		ImGui::TextUnformatted("Position (top face center)");
+		m_state->m_editModified |= SteppedVec3("pos", posLabels, m_state->m_editPos, 1.0f);
+		m_state->m_editModified |= CameraButton("poscam", m_state->m_editPos);
 
-		std::string label = patch->name.empty()
-			? fmt::format("{} {}", patch->type == MeshPatchType::Box ? "Block" : "Patch", patch->id)
-			: patch->name;
+		ImGui::TextUnformatted("Size");
+		m_state->m_editModified |= SteppedVec3("size", sizeLabels, m_state->m_editSize, 1.0f);
+	}
+	else
+	{
+		m_state->m_editModified |=
+			ImGui::InputFloat3("Start", glm::value_ptr(m_state->m_editPos));
+		m_state->m_editModified |= CameraButton("startcam", m_state->m_editPos);
 
-		// Driven from the edit buffer rather than from ImGui's own storage, so that only one
-		// patch is ever open. The buffer holds a single patch, and two open editors would
-		// otherwise overwrite each other's values every frame.
-		ImGui::SetNextItemOpen(m_state->m_editId == patch->id);
+		m_state->m_editModified |=
+			ImGui::InputFloat3("End", glm::value_ptr(m_state->m_editSize));
+		m_state->m_editModified |= CameraButton("endcam", m_state->m_editSize);
 
-		const bool open = ImGui::TreeNode(label.c_str());
-
-		ImGui::SameLine();
-
-		if (ImGui::SmallButton("Delete"))
-			deleteId = patch->id;
-
-		if (open && m_state->m_editId != patch->id)
-			m_state->beginEdit(patch);
-		else if (!open && m_state->m_editId == patch->id)
-			m_state->m_editId = 0;
-
-		if (open)
-		{
-			m_state->m_editModified |= ImGui::InputText("Name", &m_state->m_editName);
-
-			if (!m_state->m_editSupported)
-			{
-				ImGui::TextDisabled("%d vertices - not a two point patch, so not editable here.",
-					static_cast<int>(patch->verts.size()));
-			}
-			else if (patch->type == MeshPatchType::Box)
-			{
-				static const char* const posLabels[3] = { "Y", "X", "Z" };
-				static const char* const sizeLabels[3] = { "L", "W", "H" };
-
-				ImGui::TextUnformatted("Position (top face center)");
-				m_state->m_editModified |= SteppedVec3("pos", posLabels, m_state->m_editPos, 1.0f);
-				m_state->m_editModified |= CameraButton("poscam", m_state->m_editPos);
-
-				ImGui::TextUnformatted("Size");
-				m_state->m_editModified |= SteppedVec3("size", sizeLabels, m_state->m_editSize, 1.0f);
-			}
-			else
-			{
-				m_state->m_editModified |=
-					ImGui::InputFloat3("Start", glm::value_ptr(m_state->m_editPos));
-				m_state->m_editModified |= CameraButton("startcam", m_state->m_editPos);
-
-				m_state->m_editModified |=
-					ImGui::InputFloat3("End", glm::value_ptr(m_state->m_editSize));
-				m_state->m_editModified |= CameraButton("endcam", m_state->m_editSize);
-
-				m_state->m_editModified |=
-					ImGui::SliderFloat("Width", &m_state->m_editWidth, 1.0f, 100.0f, "%.1f");
-			}
-
-			ImGui::BeginDisabled(!m_state->m_editModified);
-
-			if (ImGui::Button("Save Changes"))
-				save = true;
-
-			ImGui::EndDisabled();
-
-			ImGui::TreePop();
-		}
-
-		ImGui::PopID();
+		m_state->m_editModified |=
+			ImGui::SliderFloat("Width", &m_state->m_editWidth, 1.0f, 100.0f, "%.1f");
 	}
 
-	if (save)
+	if (m_state->m_editModified && ImGui::Button("Save Changes"))
 	{
 		auto modifiedTiles = m_state->saveEdit();
-
-		if (!modifiedTiles.empty())
-			m_meshTool->RebuildTiles(modifiedTiles);
-	}
-
-	if (deleteId != 0)
-	{
-		// Collect the tiles before deleting: afterwards there is no patch to ask about.
-		auto modifiedTiles = navMesh->GetTilesIntersectingMeshPatch(deleteId);
-
-		navMesh->DeleteMeshPatchById(deleteId);
-
-		// Deleting renumbers what is left, so a held id would now name a different patch.
-		m_state->m_editId = 0;
-		m_state->m_editModified = false;
-
-		// Geometry can be appended to the collision mesh but not taken back out of it, so
-		// removing a patch means regenerating the whole thing before the tiles rebuild.
-		if (auto zoneProj = m_meshTool->GetZoneProj())
-			zoneProj->RebuildCollisionMesh();
 
 		if (!modifiedTiles.empty())
 			m_meshTool->RebuildTiles(modifiedTiles);
@@ -382,10 +603,39 @@ void MeshPatchTool::handleClick(const glm::vec3& p, bool shift)
 {
 	if (!m_meshTool) return;
 
+	// A click starts a new patch, so it leaves the selected one - unless that has edits in
+	// flight, which a stray click into the scene should not throw away.
+	if (m_state->m_editId != 0)
+	{
+		if (m_state->m_editModified)
+			return;
+
+		m_state->m_editId = 0;
+	}
+
 	std::vector<dtTileRef> modifiedTiles = m_state->handlePatchClick(p, shift);
 
 	if (!modifiedTiles.empty())
 		m_meshTool->RebuildTiles(modifiedTiles);
+}
+
+void MeshPatchTool::handleRenderOverlay()
+{
+	if (m_state->m_editId != 0 && m_state->m_editModified)
+	{
+		ImGui::TextColored(ImVec4(255, 255, 255, 192),
+			"Unsaved changes. Save them, or click 'Create New' to discard them and lay a new patch.");
+	}
+	else if (m_state->m_hitPosSet)
+	{
+		ImGui::TextColored(ImVec4(255, 255, 255, 192),
+			"LMB: Click the far side of the gap to finish the patch.");
+	}
+	else
+	{
+		ImGui::TextColored(ImVec4(255, 255, 255, 192),
+			"LMB: Click one side of a gap to start a new patch.");
+	}
 }
 
 //----------------------------------------------------------------------------
@@ -703,57 +953,48 @@ void MeshPatchToolState::handleRender()
 
 	// Outline every patch. They become ordinary geometry once the tiles rebuild, so without
 	// this there is nothing to show which mesh came from a patch and which from the zone.
-	const uint32_t color = duRGBA(255, 190, 0, 220);
-
+	// The selected one is skipped here and drawn last, highlighted, so it is never hidden
+	// under its own ordinary outline.
 	dd.begin(DU_DRAW_LINES, 2.0f);
 
 	for (size_t i = 0; i < navMesh->GetMeshPatchCount(); ++i)
 	{
 		const MeshPatch* patch = navMesh->GetMeshPatch(i);
-		const size_t n = patch->verts.size();
 
-		if (patch->type == MeshPatchType::Box)
-		{
-			if (n < 2)
-				continue;
-
-			// Two corners, so the ring walk below does not apply - draw the twelve edges.
-			const glm::vec3 lo = glm::min(patch->verts[0], patch->verts[1]);
-			const glm::vec3 hi = glm::max(patch->verts[0], patch->verts[1]);
-
-			duAppendBoxWire(&dd, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, color);
-			continue;
-		}
-
-		// A strip is pairs along its length rather than a ring, so walk one side out and the
-		// other back to get a perimeter. Legacy four vertex patches are already a ring.
-		std::vector<glm::vec3> ring;
-
-		if (patch->type == MeshPatchType::Strip)
-		{
-			if (n < 4)
-				continue;
-
-			for (size_t j = 0; j < n; j += 2)
-				ring.push_back(patch->verts[j]);
-
-			for (size_t j = n; j > 0; j -= 2)
-				ring.push_back(patch->verts[j - 1]);
-		}
-		else
-		{
-			ring.assign(patch->verts.begin(), patch->verts.end());
-		}
-
-		for (size_t j = 0; j < ring.size(); ++j)
-		{
-			const glm::vec3& a = ring[j];
-			const glm::vec3& b = ring[(j + 1) % ring.size()];
-
-			dd.vertex(a.x, a.y + 0.1f, a.z, color);
-			dd.vertex(b.x, b.y + 0.1f, b.z, color);
-		}
+		if (patch->id != m_editId)
+			AppendPatchOutline(dd, patch->type, patch->verts, kPatchColor, 0.1f);
 	}
 
 	dd.end();
+
+	const MeshPatch* selected = m_editId != 0 ? navMesh->GetMeshPatchById(m_editId) : nullptr;
+	if (!selected)
+		return;
+
+	DrawPatchHighlight(dd, selected->type, selected->verts);
+
+	// Where the edit will put it, so a change can be lined up before paying for the rebuild.
+	if (m_editModified && m_editSupported)
+	{
+		std::vector<glm::vec3> preview;
+
+		if (selected->type == MeshPatchType::Box)
+		{
+			glm::vec3 lo, hi;
+			BlockCornersFromTopCenter(m_editPos, m_editSize, lo, hi);
+			preview = { lo, hi };
+		}
+		else
+		{
+			preview = BuildPatchStrip(from_eq_coord(m_editPos), from_eq_coord(m_editSize),
+				m_editWidth, m_endExtension);
+		}
+
+		const MeshPatchType previewType = selected->type == MeshPatchType::Box
+			? MeshPatchType::Box : MeshPatchType::Strip;
+
+		dd.begin(DU_DRAW_LINES, 2.0f);
+		AppendPatchOutline(dd, previewType, preview, duRGBA(255, 255, 255, 220), 0.2f);
+		dd.end();
+	}
 }
