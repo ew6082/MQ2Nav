@@ -454,12 +454,82 @@ void ConvexVolumeToolState::handleRender()
 	// Find height extents of the shape.
 	float minh = FLT_MAX, maxh = 0;
 
-	if (m_currentVolumeId != 0)
+	if (m_currentVolumeId != 0 && !m_editVolume.verts.empty())
 	{
+		// The selected volume is also drawn by the navmesh renderer in its area colour, with an
+		// outline at nearly full opacity. Under the old GL renderer a faint white outline on top
+		// of that was just about visible; ZoneRenderDebugDraw has no depth control at all
+		// (depthMask is a stub), and an outline at 64 alpha drawn exactly along a 220 alpha one
+		// disappears. So the selection gets its own geometry: a translucent fill and a solid,
+		// thicker outline in one highlight colour regardless of area type, pushed very slightly
+		// outside the volume so it never lies exactly on the edges it is highlighting.
 		minh = m_editVolume.hmin;
 		maxh = m_editVolume.hmax;
 
-		dd.begin(DU_DRAW_POINTS, 4.0f);
+		const unsigned int fillCol = duRGBA(255, 220, 64, 72);
+		const unsigned int sideCol = duRGBA(255, 220, 64, 40);
+		const unsigned int lineCol = duRGBA(255, 220, 64, 255);
+		constexpr float kInflate = 0.05f;
+
+		glm::vec3 centre{ 0.0f };
+		for (const glm::vec3& v : m_editVolume.verts)
+			centre += v;
+		centre /= static_cast<float>(m_editVolume.verts.size());
+
+		std::vector<glm::vec3> outer;
+		outer.reserve(m_editVolume.verts.size());
+		for (const glm::vec3& v : m_editVolume.verts)
+		{
+			glm::vec3 out{ v.x - centre.x, 0.0f, v.z - centre.z };
+			float len = glm::length(out);
+			if (len > 1e-4f)
+				out *= kInflate / len;
+			outer.push_back({ v.x + out.x, 0.0f, v.z + out.z });
+		}
+
+		const float lo = minh - kInflate;
+		const float hi = maxh + kInflate;
+		const size_t n = outer.size();
+
+		dd.begin(DU_DRAW_TRIS);
+		for (size_t j = 0, k = n - 1; j < n; k = j++)
+		{
+			const glm::vec3& va = outer[k];
+			const glm::vec3& vb = outer[j];
+
+			// top, as a fan from the first vertex
+			dd.vertex(outer[0].x, hi, outer[0].z, fillCol);
+			dd.vertex(vb.x, hi, vb.z, fillCol);
+			dd.vertex(va.x, hi, va.z, fillCol);
+
+			// side
+			dd.vertex(va.x, lo, va.z, sideCol);
+			dd.vertex(va.x, hi, va.z, sideCol);
+			dd.vertex(vb.x, hi, vb.z, sideCol);
+
+			dd.vertex(va.x, lo, va.z, sideCol);
+			dd.vertex(vb.x, hi, vb.z, sideCol);
+			dd.vertex(vb.x, lo, vb.z, sideCol);
+		}
+		dd.end();
+
+		dd.begin(DU_DRAW_LINES, 3.0f);
+		for (size_t j = 0, k = n - 1; j < n; k = j++)
+		{
+			const glm::vec3& va = outer[k];
+			const glm::vec3& vb = outer[j];
+
+			dd.vertex(va.x, lo, va.z, lineCol);
+			dd.vertex(vb.x, lo, vb.z, lineCol);
+			dd.vertex(va.x, hi, va.z, lineCol);
+			dd.vertex(vb.x, hi, vb.z, lineCol);
+			dd.vertex(va.x, lo, va.z, lineCol);
+			dd.vertex(va.x, hi, va.z, lineCol);
+		}
+		dd.end();
+
+		// Vertex handles stay on the real vertices - they are what an edit moves.
+		dd.begin(DU_DRAW_POINTS, 5.0f);
 		for (size_t i = 0; i < m_editVolume.verts.size(); ++i)
 		{
 			unsigned int col = duRGBA(255, 255, 255, 255);
@@ -468,20 +538,6 @@ void ConvexVolumeToolState::handleRender()
 			dd.vertex(m_editVolume.verts[i].x,
 				m_editVolume.verts[i].y + 0.1f,
 				m_editVolume.verts[i].z, col);
-		}
-		dd.end();
-
-		dd.begin(DU_DRAW_LINES, 2.0f);
-		for (size_t i = 0, j = m_editVolume.verts.size() - 1; i < m_editVolume.verts.size(); j = i++)
-		{
-			const glm::vec3& vi = m_editVolume.verts[j];
-			const glm::vec3& vj = m_editVolume.verts[i];
-			dd.vertex(vj.x, minh, vj.z, duRGBA(255, 255, 255, 64));
-			dd.vertex(vi.x, minh, vi.z, duRGBA(255, 255, 255, 64));
-			dd.vertex(vj.x, maxh, vj.z, duRGBA(255, 255, 255, 64));
-			dd.vertex(vi.x, maxh, vi.z, duRGBA(255, 255, 255, 64));
-			dd.vertex(vj.x, minh, vj.z, duRGBA(255, 255, 255, 64));
-			dd.vertex(vj.x, maxh, vj.z, duRGBA(255, 255, 255, 64));
 		}
 		dd.end();
 	}
