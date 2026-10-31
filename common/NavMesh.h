@@ -219,6 +219,9 @@ public:
 	MeshPatch* GetMeshPatchById(uint32_t id);
 	void DeleteMeshPatchById(uint32_t id);
 
+	// Ids follow list order, so moving a patch renumbers it and the ones it passes.
+	void MoveMeshPatchToIndex(uint32_t id, size_t index);
+
 	std::vector<dtTileRef> GetTilesIntersectingMeshPatch(uint32_t id);
 
 	//------------------------------------------------------------------------
@@ -259,6 +262,8 @@ private:
 	void InitializeAreas();
 
 	void ResetSavedData(PersistedDataFields fields = PersistedDataFields::All);
+
+	void RenumberMeshPatches();
 
 	void LoadFromProto(const nav::NavMeshFile& proto, PersistedDataFields fields);
 	void SaveToProto(nav::NavMeshFile& proto, PersistedDataFields fields);

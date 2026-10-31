@@ -980,9 +980,32 @@ void NavMesh::DeleteMeshPatchById(uint32_t id)
 
 	m_patches.erase(iter);
 
-	// Renumber what is left, so the list reads 1..n instead of climbing forever as patches
-	// are tried and thrown away. Nothing else refers to a patch by id - unlike connections,
-	// they exist only until the tiles are built from them - so this is safe to do.
+	RenumberMeshPatches();
+}
+
+void NavMesh::MoveMeshPatchToIndex(uint32_t id, size_t toIndex)
+{
+	auto fromIter = std::find_if(m_patches.begin(), m_patches.end(),
+		[id](const auto& ptr) { return ptr->id == id; });
+	if (fromIter == m_patches.end() || toIndex >= m_patches.size())
+		return;
+
+	const size_t fromIndex = std::distance(m_patches.begin(), fromIter);
+	auto toIter = std::next(m_patches.begin(), toIndex);
+
+	if (toIndex > fromIndex)
+		std::rotate(fromIter, std::next(fromIter), std::next(toIter));
+	else
+		std::rotate(toIter, fromIter, std::next(fromIter));
+
+	RenumberMeshPatches();
+}
+
+// Keeps the ids at 1..n in list order, instead of climbing forever as patches are tried and
+// thrown away. Nothing else refers to a patch by id - unlike connections, they exist only
+// until the tiles are built from them - so this is safe to do.
+void NavMesh::RenumberMeshPatches()
+{
 	m_patchesById.clear();
 	m_nextPatchId = 1;
 
